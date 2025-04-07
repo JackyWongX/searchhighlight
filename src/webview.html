@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Search Results</title>
+    <style>
+        body {
+            padding: 10px;
+            font-family: var(--vscode-font-family);
+            font-size: var(--vscode-font-size);
+            color: var(--vscode-foreground);
+        }
+        .result-item {
+            padding: 8px;
+            margin-bottom: 8px;
+            cursor: pointer;
+            border: 1px solid var(--vscode-widget-border);
+            border-radius: 4px;
+        }
+        .result-item:hover {
+            background-color: var(--vscode-list-hoverBackground);
+        }
+        .file-path {
+            color: var(--vscode-descriptionForeground);
+            font-size: 0.9em;
+            margin-bottom: 4px;
+        }
+        .line-content {
+            white-space: pre-wrap;
+            font-family: var(--vscode-editor-font-family);
+        }
+        .highlight-read {
+            background-color: rgba(0, 255, 0, 0.2);
+            border-radius: 2px;
+            padding: 2px;
+        }
+        .highlight-write {
+            background-color: rgba(255, 0, 0, 0.2);
+            border-radius: 2px;
+            padding: 2px;
+        }
+        .summary {
+            margin-bottom: 16px;
+            padding: 8px;
+            background-color: var(--vscode-editor-background);
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+    <div class="summary" id="summary"></div>
+    <div id="results"></div>
+    <script>
+        (function() {
+            const vscode = acquireVsCodeApi();
+            
+            // 处理点击事件，跳转到对应文件和行
+            document.addEventListener('click', (e) => {
+                const resultItem = e.target.closest('.result-item');
+                if (resultItem) {
+                    const { file, line } = resultItem.dataset;
+                    vscode.postMessage({
+                        type: 'jump',
+                        file: file,
+                        line: parseInt(line, 10)
+                    });
+                }
+            });
+
+            // 处理来自扩展的消息
+            window.addEventListener('message', event => {
+                const message = event.data;
+                switch (message.type) {
+                    case 'results':
+                        updateResults(message.results, message.searchText);
+                        break;
+                }
+            });
+
+            // 更新搜索结果显示
+            function updateResults(results, searchText) {
+                const summaryEl = document.getElementById('summary');
+                const resultsEl = document.getElementById('results');
+                
+                // 统计读写操作数量
+                const writeCount = results.filter(r => r.isWrite).length;
+                const readCount = results.length - writeCount;
+                
+                // 更新统计信息
+                summaryEl.textContent = `找到 ${results.length} 处匹配：${readCount} 处读操作，${writeCount} 处写操作`;
+                
+                // 更新结果列表
+                resultsEl.innerHTML = results.map(result => {
+                    const line = result.lineContent;
+                    const highlightClass = result.isWrite ? 'highlight-write' : 'highlight-read';
+                    
+                    // 高亮搜索文本
+                    const escapedSearchText = searchText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                    const highlightedLine = line.replace(
+                        new RegExp(escapedSearchText, 'g'),
+                        `<span class="${highlightClass}">$&</span>`
+                    );
+                    
+                    return `
+                        <div class="result-item" data-file="${result.file}" data-line="${result.line}">
+                            <div class="file-path">${result.file}:${result.line + 1}</div>
+                            <div class="line-content">${highlightedLine}</div>
+                        </div>
+                    `;
+                }).join('');
+            }
+        }())
+    </script>
+</body>
+</html>

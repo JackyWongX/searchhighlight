@@ -1,0 +1,69 @@
+{
+  "name": "searchhighlight",
+  "displayName": "SearchHighlight",
+  "description": "SearchHighlight，主要功能是搜索字符串，并根据搜索到的字符串所在行中的读写属性来显示不同的颜色",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.99.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onCommand:searchhighlight.searchAndHighlight"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "search-highlight",
+          "title": "Search Highlight",
+          "icon": "$(search)"
+        }
+      ]
+    },
+    "views": {
+      "search-highlight": [
+        {
+          "id": "searchHighlightResults",
+          "name": "Search Results",
+          "type": "webview"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "searchhighlight.searchAndHighlight",
+        "title": "Search and Highlight Selected Text"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "searchhighlight.searchAndHighlight",
+        "key": "ctrl+shift+f",
+        "mac": "cmd+shift+f",
+        "when": "editorHasSelection"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile && npm run lint",
+    "lint": "eslint src",
+    "test": "vscode-test"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.99.0",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "20.x",
+    "@typescript-eslint/eslint-plugin": "^8.28.0",
+    "@typescript-eslint/parser": "^8.28.0",
+    "eslint": "^9.23.0",
+    "typescript": "^5.8.2",
+    "@vscode/test-cli": "^0.0.10",
+    "@vscode/test-electron": "^2.4.1"
+  }
+}
