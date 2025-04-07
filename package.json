@@ -2,7 +2,7 @@
   "name": "searchhighlight",
   "displayName": "SearchHighlight",
   "description": "SearchHighlight，主要功能是搜索代码变量和函数以及其他字符并根据搜索到的字符串所在行中的读写属性来显示不同的颜色",
-  "version": "0.0.1",
+  "version": "1.0.0",
   "engines": {
     "vscode": "^1.80.0"
   },
@@ -13,6 +13,10 @@
     "onCommand:searchhighlight.searchAndHighlight"
   ],
   "main": "./out/extension.js",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/JackyWongX/searchhighlight"
+  },
   "contributes": {
     "viewsContainers": {
       "activitybar": [
@@ -121,8 +125,9 @@
     "test": "vscode-test"
   },
   "publisher": "JackyWong",
+  "license": "MIT",
   "devDependencies": {
-    "@types/vscode": "^1.99.0",
+    "@types/vscode": "^1.80.0",
     "@types/mocha": "^10.0.10",
     "@types/node": "20.x",
     "@typescript-eslint/eslint-plugin": "^8.28.0",
