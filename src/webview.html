@@ -70,11 +70,9 @@
             display: inline-block;
         }
         .highlight-read {
-            background-color: rgba(64, 200, 64, 0.2);
             border-radius: 2px;
         }
         .highlight-write {
-            background-color: rgba(240, 64, 64, 0.2);
             border-radius: 2px;
         }
         .summary {
@@ -85,12 +83,30 @@
         }
     </style>
 </head>
-<body></body>
+<body>
     <div class="summary" id="summary"></div>
     <div id="results"></div>
     <script>
         (function() {
             const vscode = acquireVsCodeApi();
+            let currentColors = {
+                read: 'rgba(64, 200, 64, 0.2)',
+                write: 'rgba(240, 64, 64, 0.2)'
+            };
+            
+            // 更新样式
+            function updateColors(colors) {
+                const style = document.createElement('style');
+                style.textContent = `
+                    .highlight-read {
+                        background-color: ${colors.read};
+                    }
+                    .highlight-write {
+                        background-color: ${colors.write};
+                    }
+                `;
+                document.head.appendChild(style);
+            }
             
             // 处理点击事件
             document.addEventListener('click', (e) => {
@@ -121,10 +137,17 @@
                 const message = event.data;
                 switch (message.type) {
                     case 'results':
+                        if (message.colors) {
+                            currentColors = message.colors;
+                            updateColors(currentColors);
+                        }
                         updateResults(message.results, message.searchText);
                         break;
                 }
             });
+
+            // 初始化默认颜色
+            updateColors(currentColors);
 
             // 更新搜索结果显示
             function updateResults(results, searchText) {

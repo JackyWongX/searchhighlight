@@ -36,6 +36,14 @@
       {
         "command": "searchhighlight.searchAndHighlight",
         "title": "Search and Highlight Selected Text"
+      },
+      {
+        "command": "searchhighlight.reloadPatterns",
+        "title": "重新加载写操作检测规则"
+      },
+      {
+        "command": "searchhighlight.focus",
+        "title": "Focus Search Results View"
       }
     ],
     "keybindings": [
@@ -45,7 +53,64 @@
         "mac": "cmd+shift+f",
         "when": "editorHasSelection"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "Search Highlight",
+      "properties": {
+        "searchhighlight.patterns": {
+          "type": "object",
+          "default": {
+            "common": {
+              "operators": [
+                "=",
+                "+=",
+                "-=",
+                "*=",
+                "/=",
+                "%=",
+                "++",
+                "--"
+              ],
+              "methods": [
+                ".append",
+                ".add",
+                ".insert",
+                ".remove",
+                ".delete",
+                ".clear",
+                ".set",
+                ".push",
+                ".pop",
+                ".shift",
+                ".unshift"
+              ],
+              "excludeOperators": [
+                "==",
+                "===",
+                "!=",
+                "!==",
+                ">=",
+                "<=",
+                ">",
+                "<"
+              ]
+            }
+          },
+          "description": "写操作检测的关键字配置。可以配置运算符和方法名。",
+          "markdownDescription": "写操作检测的关键字配置。包含:\n- `operators`: 运算符列表\n- `methods`: 方法名列表\n- `excludeOperators`: 过滤用的比较操作符列表"
+        },
+        "searchhighlight.colors.read": {
+          "type": "string",
+          "default": "rgba(64, 200, 64, 0.5)",
+          "description": "读操作高亮颜色"
+        },
+        "searchhighlight.colors.write": {
+          "type": "string",
+          "default": "rgba(240, 64, 64, 0.5)",
+          "description": "写操作高亮颜色"
+        }
+      }
+    }
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
