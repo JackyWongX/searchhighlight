@@ -1,71 +1,69 @@
-# searchhighlight README
+# SearchHighlight
 
-This is the README for your extension "searchhighlight". After writing up a brief description, we recommend including the following sections.
+[English](README_EN.md)
 
-## Features
+SearchHighlight 是一个用于搜索代码中变量、函数等标识符的 VSCode 插件。它能够根据搜索结果所在行的上下文来判断该标识符是在进行读操作还是写操作，并以不同的颜色进行高亮显示。
 
-Describe specific features of your extension including screenshots of your extension in action. Image paths are relative to this README file.
+## 功能特点
 
-For example if there is an image subfolder under your extension project workspace:
+- 快速搜索工作区内的代码标识符
+- 智能识别读写操作
+- 可自定义的读写操作高亮颜色
+- 丰富的写操作检测规则配置
+- 实时显示搜索结果统计
+- 支持文件分组显示
+- 支持快速跳转到代码位置
 
-\!\[feature X\]\(images/feature-x.png\)
+## 使用方法
 
-> Tip: Many popular extensions utilize animations. This is an excellent way to show off your extension! We recommend short, focused animations that are easy to follow.
+1. 在编辑器中选中要搜索的文本
+2. 使用快捷键 `Ctrl+Shift+F` (Windows) 或 `Cmd+Shift+F` (MacOS) 进行搜索
+3. 在活动栏的 Search Highlight 视图中查看搜索结果
+4. 点击搜索结果可跳转到对应的代码位置
 
-## Requirements
+## 插件设置
 
-If you have any requirements or dependencies, add a section describing those and how to install and configure them.
+### 写操作检测规则
 
-## Extension Settings
+可以通过 `searchhighlight.patterns` 配置写操作的检测规则：
 
-Include if your extension adds any VS Code settings through the `contributes.configuration` extension point.
+```json
+{
+  "common": {
+    "operators": ["=", "+=", "-=", "*=", "/=", "%=", "++", "--"],
+    "methods": [".append", ".add", ".insert", ".remove", ".delete", ".clear"],
+    "excludeOperators": ["==", "===", "!=", "!==", ">=", "<=", ">", "<"]
+  }
+}
+```
 
-For example:
+### 高亮颜色
 
-This extension contributes the following settings:
+- `searchhighlight.colors.read`: 读操作高亮颜色 (默认: "rgba(64, 200, 64, 0.5)")
+- `searchhighlight.colors.write`: 写操作高亮颜色 (默认: "rgba(240, 64, 64, 0.5)")
 
-* `myExtension.enable`: Enable/disable this extension.
-* `myExtension.thing`: Set to `blah` to do something.
+## 快捷键
 
-## Known Issues
+| 功能 | Windows | MacOS |
+|------|---------|--------|
+| 搜索选中文本 | Ctrl+Shift+F | Cmd+Shift+F |
 
-Calling out known issues can help limit users opening duplicate issues against your extension.
+## 支持的文件类型
 
-## Release Notes
+- JavaScript (.js, .jsx)
+- TypeScript (.ts, .tsx)
+- Python (.py)
+- Java (.java)
+- C/C++ (.c, .cpp, .h, .hpp)
+- Vue (.vue)
+- Go (.go)
+- Rust (.rs)
+- PHP (.php)
 
-Users appreciate release notes as you update your extension.
+## 贡献
 
-### 1.0.0
+欢迎提交 issue 和 pull request 来帮助改进这个插件。
 
-Initial release of ...
+## 许可证
 
-### 1.0.1
-
-Fixed issue #.
-
-### 1.1.0
-
-Added features X, Y, and Z.
-
----
-
-## Following extension guidelines
-
-Ensure that you've read through the extensions guidelines and follow the best practices for creating your extension.
-
-* [Extension Guidelines](https://code.visualstudio.com/api/references/extension-guidelines)
-
-## Working with Markdown
-
-You can author your README using Visual Studio Code. Here are some useful editor keyboard shortcuts:
-
-* Split the editor (`Cmd+\` on macOS or `Ctrl+\` on Windows and Linux).
-* Toggle preview (`Shift+Cmd+V` on macOS or `Shift+Ctrl+V` on Windows and Linux).
-* Press `Ctrl+Space` (Windows, Linux, macOS) to see a list of Markdown snippets.
-
-## For more information
-
-* [Visual Studio Code's Markdown Support](http://code.visualstudio.com/docs/languages/markdown)
-* [Markdown Syntax Reference](https://help.github.com/articles/markdown-basics/)
-
-**Enjoy!**
+[MIT](LICENSE)
