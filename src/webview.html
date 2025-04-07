@@ -11,52 +11,96 @@
             font-size: var(--vscode-font-size);
             color: var(--vscode-foreground);
         }
-        .result-item {
-            padding: 8px;
-            margin-bottom: 8px;
+        .file-group {
+            margin-bottom: 16px;
+        }
+        .file-header {
+            padding: 4px 8px;
             cursor: pointer;
-            border: 1px solid var(--vscode-widget-border);
+            background-color: var(--vscode-editor-background);
             border-radius: 4px;
+            font-weight: bold;
+            display: flex;
+            align-items: center;
+        }
+        .file-header:hover {
+            background-color: var(--vscode-list-hoverBackground);
+        }
+        .file-header .collapse-icon {
+            margin-right: 8px;
+            transition: transform 0.2s;
+        }
+        .file-header.collapsed .collapse-icon {
+            transform: rotate(-90deg);
+        }
+        .result-list {
+            margin-left: 24px;
+            transition: height 0.2s ease;
+        }
+        .result-list.collapsed {
+            display: none;
+        }
+        .result-item {
+            padding: 4px 8px;
+            cursor: pointer;
+            font-family: var(--vscode-editor-font-family);
+            display: flex;
+            align-items: baseline;
+            line-height: 1.5;
         }
         .result-item:hover {
             background-color: var(--vscode-list-hoverBackground);
         }
-        .file-path {
+        .line-number {
             color: var(--vscode-descriptionForeground);
-            font-size: 0.9em;
-            margin-bottom: 4px;
+            min-width: 50px;
+            padding-right: 16px;
+            text-align: right;
         }
         .line-content {
             white-space: pre-wrap;
-            font-family: var(--vscode-editor-font-family);
+            flex: 1;
+        }
+        .highlight-read, .highlight-write {
+            white-space: nowrap;
+            display: inline-block;
         }
         .highlight-read {
-            background-color: rgba(0, 255, 0, 0.2);
+            background-color: rgba(64, 200, 64, 0.2);
             border-radius: 2px;
-            padding: 2px;
         }
         .highlight-write {
-            background-color: rgba(255, 0, 0, 0.2);
+            background-color: rgba(240, 64, 64, 0.2);
             border-radius: 2px;
-            padding: 2px;
         }
         .summary {
-            margin-bottom: 16px;
+            margin-bottom: 12px;
             padding: 8px;
             background-color: var(--vscode-editor-background);
             border-radius: 4px;
         }
     </style>
 </head>
-<body>
+<body></body>
     <div class="summary" id="summary"></div>
     <div id="results"></div>
     <script>
         (function() {
             const vscode = acquireVsCodeApi();
             
-            // 处理点击事件，跳转到对应文件和行
+            // 处理点击事件
             document.addEventListener('click', (e) => {
+                const fileHeader = e.target.closest('.file-header');
+                if (fileHeader) {
+                    // 处理文件组的折叠/展开
+                    fileHeader.classList.toggle('collapsed');
+                    const resultList = fileHeader.nextElementSibling;
+                    if (resultList) {
+                        resultList.classList.toggle('collapsed');
+                    }
+                    return;
+                }
+
                 const resultItem = e.target.closest('.result-item');
                 if (resultItem) {
                     const { file, line } = resultItem.dataset;
@@ -90,22 +134,44 @@
                 // 更新统计信息
                 summaryEl.textContent = `找到 ${results.length} 处匹配：${readCount} 处读操作，${writeCount} 处写操作`;
                 
-                // 更新结果列表
-                resultsEl.innerHTML = results.map(result => {
-                    const line = result.lineContent;
-                    const highlightClass = result.isWrite ? 'highlight-write' : 'highlight-read';
-                    
-                    // 高亮搜索文本
-                    const escapedSearchText = searchText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                    const highlightedLine = line.replace(
-                        new RegExp(escapedSearchText, 'g'),
-                        `<span class="${highlightClass}">$&</span>`
-                    );
-                    
+                // 按文件分组结果
+                const groupedResults = {};
+                results.forEach(result => {
+                    if (!groupedResults[result.file]) {
+                        groupedResults[result.file] = [];
+                    }
+                    groupedResults[result.file].push(result);
+                });
+
+                // 生成分组后的 HTML
+                resultsEl.innerHTML = Object.entries(groupedResults).map(([file, fileResults]) => {
+                    // 从第一个结果中获取文件名
+                    const fileName = fileResults[0].fileName;
+                    const resultItems = fileResults.map(result => {
+                        const line = result.lineContent.trimLeft();
+                        const highlightClass = result.isWrite ? 'highlight-write' : 'highlight-read';
+                        const escapedSearchText = searchText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                        const highlightedLine = line.replace(
+                            new RegExp(escapedSearchText, 'g'),
+                            `<span class="${highlightClass}">$&</span>`
+                        );
+                        
+                        return `
+                            <div class="result-item" data-file="${result.file}" data-line="${result.line}">
+                                <span class="line-number">${result.line + 1}  ${highlightedLine}</span>
+                            </div>
+                        `;
+                    }).join('');
+
                     return `
-                        <div class="result-item" data-file="${result.file}" data-line="${result.line}">
-                            <div class="file-path">${result.file}:${result.line + 1}</div>
-                            <div class="line-content">${highlightedLine}</div>
+                        <div class="file-group">
+                            <div class="file-header">
+                                <span class="collapse-icon">▼</span>
+                                <span class="file-path">${file}</span>
+                            </div>
+                            <div class="result-list">
+                                ${resultItems}
+                            </div>
                         </div>
                     `;
                 }).join('');
