@@ -125,6 +125,7 @@
     "test": "vscode-test"
   },
   "publisher": "JackyWong",
+  "icon": "./images/icon.png",
   "license": "MIT",
   "devDependencies": {
     "@types/vscode": "^1.80.0",
