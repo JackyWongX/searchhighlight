@@ -1,6 +1,7 @@
 .vscode/**
 .vscode-test/**
 src/**
+!src/webview.html
 **/tsconfig.json
 **/.eslintrc.json
 **/*.map

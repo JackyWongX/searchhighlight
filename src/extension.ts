@@ -147,7 +147,8 @@ class RipGrepSearch {
                     '--no-ignore',       // 不使用 ignore 文件
                     '--max-columns=1000', // 限制每行最大长度
                     '--fixed-strings',   // 按字面字符串搜索
-                    '--ignore-case',     // 忽略大小写
+                    '--word-regexp',     // 全词匹配 (新增)
+                    '--case-sensitive',  // 不忽略大小写 (新增)
                     ...excludeArgs,      // 排除目录
                     '--',                // 分隔符，确保后面的参数不被解析为选项
                     searchText,          // 搜索模式
@@ -199,12 +200,14 @@ class RipGrepSearch {
                             continue;
                         }
 
-                        // 1. 查找最后一个点(.)的位置
-                        const lastDotPos = line.lastIndexOf('.');
+                        //console.log(`处理行: ${line} (${line.length} 字符)`);
+                        // 1. 查找第一个点(.)的位置
+                        const lastDotPos = line.indexOf('.');
                         if (lastDotPos === -1) {
                             console.warn('无效格式(缺少文件扩展名):', line);
                             continue;
                         }
+                        //console.warn(`.的位置: ${lastDotPos} 后面的字符: ${line.substring(lastDotPos)}`);
 
                         // 2. 从点位置开始查找第一个冒号(:)
                         const firstColonAfterDot = line.indexOf(':', lastDotPos);
@@ -212,6 +215,7 @@ class RipGrepSearch {
                             console.warn('无效格式(文件名后缺少冒号):', line);
                             continue;
                         }
+                        //console.warn(`:的位置: ${firstColonAfterDot} 后面的字符: ${line.substring(firstColonAfterDot)}`);
 
                         // 3. 查找下一个冒号(分隔行号和内容)
                         const secondColonAfterDot = line.indexOf(':', firstColonAfterDot + 1);
@@ -219,6 +223,7 @@ class RipGrepSearch {
                             console.warn('无效格式(行号后缺少冒号):', line);
                             continue;
                         }
+                        //console.warn(`:的位置: ${secondColonAfterDot} 后面的字符: ${line.substring(secondColonAfterDot)}`);
 
                         // 提取各部分
                         const filePath = line.substring(0, firstColonAfterDot);
