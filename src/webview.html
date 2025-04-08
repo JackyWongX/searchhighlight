@@ -28,21 +28,21 @@
             background-color: var(--vscode-list-hoverBackground);
         }
         .file-header .collapse-icon {
-            margin-right: 8px;
+            margin-right: 0px;
             transition: transform 0.2s;
         }
         .file-header.collapsed .collapse-icon {
             transform: rotate(-90deg);
         }
         .result-list {
-            margin-left: 24px;
+            margin-left: 15px;
             transition: height 0.2s ease;
         }
         .result-list.collapsed {
             display: none;
         }
         .result-item {
-            padding: 4px 8px;
+            padding: 2px 4px;
             cursor: pointer;
             font-family: var(--vscode-editor-font-family);
             display: flex;
@@ -204,7 +204,7 @@
                                 <span class="file-path">${fileName} (${file})</span>
                             </div>
                             <div class="result-list">
-                                ${resultItems}
+                            ${resultItems}
                             </div>
                         </div>
                     `;
