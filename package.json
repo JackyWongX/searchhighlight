@@ -4,7 +4,7 @@
   "description": "SearchHighlight，主要功能是搜索代码变量和函数以及其他字符并根据搜索到的字符串所在行中的读写属性来显示不同的颜色",
   "version": "1.0.0",
   "engines": {
-    "vscode": "^1.80.0"
+    "vscode": "^1.99.0"
   },
   "categories": [
     "Other"
@@ -154,15 +154,18 @@
   "publisher": "JackyWong",
   "icon": "./images/icon.png",
   "license": "MIT",
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/"
+  },
   "devDependencies": {
-    "@types/vscode": "^1.80.0",
     "@types/mocha": "^10.0.10",
     "@types/node": "20.x",
+    "@types/vscode": "^1.99.0",
     "@typescript-eslint/eslint-plugin": "^8.28.0",
     "@typescript-eslint/parser": "^8.28.0",
-    "eslint": "^9.23.0",
-    "typescript": "^5.8.2",
     "@vscode/test-cli": "^0.0.10",
-    "@vscode/test-electron": "^2.4.1"
+    "@vscode/test-electron": "^2.4.1",
+    "eslint": "^9.23.0",
+    "typescript": "^5.8.2"
   }
 }
