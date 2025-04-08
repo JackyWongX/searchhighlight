@@ -67,7 +67,7 @@ class WriteOperationDetector {
         }
     }
 
-    public isWriteOperation(filePath: string, lineText: string): boolean {
+    public isWriteOperation(lineText: string): boolean {
         const patterns = this.patterns.common;
         
         if (!patterns || !lineText) {
@@ -224,13 +224,21 @@ class RipGrepSearch {
                         const filePath = line.substring(0, firstColonAfterDot);
                         const lineNum = line.substring(firstColonAfterDot + 1, secondColonAfterDot);
                         const content = line.substring(secondColonAfterDot + 1).trim();
+                        // 若content是注释的则跳过
+                        if (content.startsWith('//') || content.startsWith('#')) {
+                            console.warn('跳过注释行:', content);
+                            continue;
+                        }
 
+                        // 获取searchText后面的内容
+                        const searchTextIndex = content.indexOf(searchText);
+                        const searchTextEnd = content.substring(searchTextIndex+searchText.length);
                         fileResults.push({
                             file: filePath,
                             fileName: path.basename(filePath),
                             line: parseInt(lineNum) - 1, // 转换为0-based索引
                             lineContent: content,
-                            isWrite: writeDetector.isWriteOperation(filePath, content)
+                            isWrite: writeDetector.isWriteOperation(searchTextEnd)
                         });
                     }
 

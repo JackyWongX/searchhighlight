@@ -12,7 +12,7 @@
             color: var(--vscode-foreground);
         }
         .file-group {
-            margin-bottom: 16px;
+            margin-bottom: 1px;
         }
         .file-header {
             padding: 4px 8px;
@@ -59,6 +59,13 @@
             text-align: right;
         }
         .line-content {
+            white-space: pre-wrap;
+            flex: 1;
+            color: var(--vscode-editor-foreground);
+            opacity: 1;
+            white-space: nowrap;
+        }
+        .file-path {
             white-space: pre-wrap;
             flex: 1;
             color: var(--vscode-editor-foreground);
@@ -194,7 +201,7 @@
                         <div class="file-group">
                             <div class="file-header">
                                 <span class="collapse-icon">▼</span>
-                                <span class="file-path">${file}</span>
+                                <span class="file-path">${fileName} (${file})</span>
                             </div>
                             <div class="result-list">
                                 ${resultItems}
