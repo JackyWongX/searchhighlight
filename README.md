@@ -64,6 +64,10 @@ SearchHighlight 是一个用于搜索代码中变量、函数等标识符的 VSC
 - Rust (.rs)
 - PHP (.php)
 
+## 注意
+- 本插件使用vscode自带的rg.exe来快速搜索文件，在大型项目中也能快速处理
+- 若搜索较慢请检查rg.exe的路径或者手动添加到系统path中后重试
+
 ## 贡献
 
 欢迎提交 [issue 和新的功能需求](https://github.com/JackyWongX/searchhighlight/issues) 来帮助改进这个插件。

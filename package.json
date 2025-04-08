@@ -2,9 +2,9 @@
   "name": "searchhighlight",
   "displayName": "SearchHighlight",
   "description": "SearchHighlight，主要功能是搜索代码变量和函数以及其他字符并根据搜索到的字符串所在行中的读写属性来显示不同的颜色",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "engines": {
-    "vscode": "^1.99.0"
+    "vscode": "^1.80.0"
   },
   "categories": [
     "Other"
@@ -160,7 +160,7 @@
   "devDependencies": {
     "@types/mocha": "^10.0.10",
     "@types/node": "20.x",
-    "@types/vscode": "^1.99.0",
+    "@types/vscode": "^1.80.0",
     "@typescript-eslint/eslint-plugin": "^8.28.0",
     "@typescript-eslint/parser": "^8.28.0",
     "@vscode/test-cli": "^0.0.10",
