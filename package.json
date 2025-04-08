@@ -112,6 +112,33 @@
           "type": "string",
           "default": "rgba(240, 64, 64, 0.5)",
           "description": "写操作高亮颜色"
+        },
+        "searchhighlight.excludePatterns": {
+          "type": "array",
+          "default": [
+            ".git",
+            ".svn",
+            ".hg",
+            ".vs",
+            ".vscode",
+            "node_modules",
+            "dist",
+            "build",
+            "target",
+            "bin",
+            "obj",
+            "out",
+            "temp",
+            "tmp",
+            "coverage",
+            "__pycache__",
+            "*.egg-info",
+            "vendor"
+          ],
+          "description": "要排除的目录列表",
+          "items": {
+            "type": "string"
+          }
         }
       }
     }

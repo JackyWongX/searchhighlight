@@ -249,8 +249,16 @@ export function activate(context: vscode.ExtensionContext) {
         }, async (progress) => {
             const results: SearchResult[] = [];
             
-            // 在工作区中搜索文件
-            const files = await vscode.workspace.findFiles('**/*.{js,ts,jsx,tsx,vue,java,py,cpp,c,cs,go,rs,php}');
+            // 从配置中获取排除目录
+            const config = vscode.workspace.getConfiguration('searchhighlight');
+            const excludeDirs = config.get<string[]>('excludePatterns') || [];
+            const excludePattern = `**/{${excludeDirs.join(',')}}/**`;
+            
+            // 在工作区中搜索文件，添加排除模式
+            const files = await vscode.workspace.findFiles(
+                '**/*.{js,ts,jsx,tsx,vue,java,py,cpp,c,cs,go,rs,php}',
+                excludePattern
+            );
             const totalFiles = files.length;
             let processedFiles = 0;
 
