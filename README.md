@@ -4,7 +4,8 @@
 
 SearchHighlight 是一个用于搜索代码中变量、函数等标识符的 VSCode 插件。它能够根据搜索结果所在行的上下文来判断该标识符是在进行读操作还是写操作，并以不同的颜色进行高亮显示。
 
-![演示](https://github.com/JackyWongX/searchhighlight/blob/master/images/%E5%B1%95%E7%A4%BA.gif)
+![演示](https://raw.githubusercontent.com/JackyWongX/searchhighlight/master/images/show.gif)
+
 ## 功能特点
 
 - 快速搜索工作区内的代码标识符
@@ -37,6 +38,8 @@ SearchHighlight 是一个用于搜索代码中变量、函数等标识符的 VSC
   }
 }
 ```
+
+通过`searchhighlight.excludePatterns`配置不需要搜索的目录
 
 ### 高亮颜色
 
