@@ -55,7 +55,7 @@
         "command": "searchhighlight.searchAndHighlight",
         "key": "ctrl+shift+f",
         "mac": "cmd+shift+f",
-        "when": "editorHasSelection"
+        "when": "editorFocus && editorTextFocus"
       }
     ],
     "configuration": {

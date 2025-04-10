@@ -303,6 +303,7 @@ class SearchResultsProvider implements vscode.WebviewViewProvider {
     private _extensionUri: vscode.Uri;
     private _currentSearchResults?: { results: SearchResult[]; searchText: string; };
     private _searchText = '';
+    private _currentDecorationTypes: vscode.TextEditorDecorationType[] = [];
 
     constructor(extensionUri: vscode.Uri) {
         this._extensionUri = extensionUri;
@@ -390,48 +391,96 @@ class SearchResultsProvider implements vscode.WebviewViewProvider {
         return html;
     }
 
+    private highlightSearchText(editor: vscode.TextEditor, searchText: string, currentLine: number) {
+        // 清除之前的高亮
+        this.clearDecorations();
+        
+        // 获取配置
+        const config = vscode.workspace.getConfiguration('searchhighlight');
+        const readColor = config.get<string>('colors.read', '#FFEB3B');
+        const writeColor = config.get<string>('colors.write', '#FF5252');
+        const { caseSensitive, matchWholeWord } = this._getSearchOptions();
+        
+        // 创建读写操作的高亮样式
+        const readDecorationType = vscode.window.createTextEditorDecorationType({
+            backgroundColor: readColor,
+        });
+        
+        const writeDecorationType = vscode.window.createTextEditorDecorationType({
+            backgroundColor: writeColor,
+        });
+        
+        this._currentDecorationTypes.push(readDecorationType, writeDecorationType);
+        
+        // 构建搜索正则表达式
+        const flags = caseSensitive ? 'g' : 'gi';
+        const wordBoundary = matchWholeWord ? '\\b' : '';
+        const searchRegex = new RegExp(`${wordBoundary}${this.escapeRegExp(searchText)}${wordBoundary}`, flags);
+        
+        // 遍历文档中的每一行
+        const readDecorations: vscode.DecorationOptions[] = [];
+        const writeDecorations: vscode.DecorationOptions[] = [];
+        
+        for (let i = 0; i < editor.document.lineCount; i++) {
+            const line = editor.document.lineAt(i);
+            let match;
+            
+            while ((match = searchRegex.exec(line.text)) !== null) {
+                const startPos = new vscode.Position(i, match.index);
+                const endPos = new vscode.Position(i, match.index + match[0].length);
+                const range = new vscode.Range(startPos, endPos);
+                
+                // 判断是否为写操作
+                const afterText = line.text.substring(match.index + match[0].length).trim();
+                const isWrite = writeDetector.isWriteOperation(afterText);
+                
+                const decoration = { range };
+                if (isWrite) {
+                    writeDecorations.push(decoration);
+                } else {
+                    readDecorations.push(decoration);
+                }
+            }
+        }
+        
+        // 应用高亮
+        editor.setDecorations(readDecorationType, readDecorations);
+        editor.setDecorations(writeDecorationType, writeDecorations);
+        
+        // 注册事件监听器清除高亮
+        const disposables: vscode.Disposable[] = [];
+        
+        // Escape 键监听
+        disposables.push(
+            vscode.commands.registerCommand('type', (args) => {
+                if (args.text === '\u001b') { // Escape key
+                    this.clearDecorations();
+                    disposables.forEach(d => d.dispose());
+                }
+            })
+        );
+        
+        // 文档切换监听
+        disposables.push(
+            vscode.window.onDidChangeActiveTextEditor(() => {
+                this.clearDecorations();
+                disposables.forEach(d => d.dispose());
+            })
+        );
+    }
+
+    private clearDecorations() {
+        this._currentDecorationTypes.forEach(decoration => decoration.dispose());
+        this._currentDecorationTypes = [];
+    }
+
     public dispose() {
-        // 清理资源
+        this.clearDecorations();
     }
 
     // 转义正则表达式特殊字符
     private escapeRegExp(string: string) {
         return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    }
-
-    // 高亮搜索文本的函数
-    private highlightSearchText(editor: vscode.TextEditor, searchText: string, lineNumber: number) {
-        // 清除之前的高亮
-        const decorations: vscode.DecorationOptions[] = [];
-        
-        // 获取指定行的文本
-        const line = editor.document.lineAt(lineNumber);
-        const lineText = line.text;
-        
-        // 创建高亮样式
-        const decorationType = vscode.window.createTextEditorDecorationType({
-            backgroundColor: 'rgba(255, 255, 0, 0.3)', // 黄色半透明背景
-            overviewRulerColor: 'rgba(255, 165, 0, 0.8)',
-            overviewRulerLane: vscode.OverviewRulerLane.Full
-        });
-        
-        // 查找所有匹配项
-        const regex = new RegExp(this.escapeRegExp(searchText), 'gi');
-        let match;
-        while ((match = regex.exec(lineText)) !== null) {
-            const startPos = new vscode.Position(lineNumber, match.index);
-            const endPos = new vscode.Position(lineNumber, match.index + match[0].length);
-            const decoration = { range: new vscode.Range(startPos, endPos) };
-            decorations.push(decoration);
-        }
-        
-        // 应用高亮
-        editor.setDecorations(decorationType, decorations);
-        
-        // 5秒后自动清除高亮
-        setTimeout(() => {
-            decorationType.dispose();
-        }, 5000);
     }
 }
 
