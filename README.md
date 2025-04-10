@@ -1,6 +1,6 @@
 # SearchHighlight
 
-[English](https://raw.githubusercontent.com/JackyWongX/searchhighlight/blob/master/README_EN.md)
+[English](https://github.com/JackyWongX/searchhighlight/blob/master/README_EN.md)
 
 SearchHighlight 是一个用于搜索代码中变量、函数等标识符的 VSCode 插件。它能够根据搜索结果所在行的上下文来判断该标识符是在进行读操作还是写操作，并以不同的颜色进行高亮显示。
 
@@ -44,7 +44,7 @@ SearchHighlight 是一个用于搜索代码中变量、函数等标识符的 VSC
 {
   "common": {
     "operators": ["=", "+=", "-=", "*=", "/=", "%=", "++", "--"],
-    "methods": [".append", ".add", ".insert", ".remove", ".delete", ".clear"],
+    "methods": ["append", "add", "insert", "remove", "delete", "clear"],
     "excludeOperators": ["==", "===", "!=", "!==", ">=", "<=", ">", "<"]
   }
 }
