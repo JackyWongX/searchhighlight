@@ -53,6 +53,13 @@
         .result-item:hover {
             background-color: var(--vscode-list-hoverBackground);
         }
+        .result-item.selected {
+            background-color: var(--vscode-list-activeSelectionBackground);
+            color: var(--vscode-list-activeSelectionForeground);
+        }
+        .result-item.selected .line-content {
+            color: var(--vscode-list-activeSelectionForeground);
+        }
         .line-number {
             color: var(--vscode-editorLineNumber-foreground);
             min-width: 50px;
@@ -135,6 +142,7 @@
                 caseSensitive: true,
                 matchWholeWord: true
             };
+            let currentSelectedItem = null;
             
             // 更新样式
             function updateColors(colors) {
@@ -183,6 +191,15 @@
 
                 const resultItem = e.target.closest('.result-item');
                 if (resultItem) {
+                    // 清除之前的选中状态
+                    if (currentSelectedItem) {
+                        currentSelectedItem.classList.remove('selected');
+                    }
+                    
+                    // 设置新的选中状态
+                    resultItem.classList.add('selected');
+                    currentSelectedItem = resultItem;
+                    
                     const { file, line } = resultItem.dataset;
                     vscode.postMessage({
                         type: 'jump',
@@ -244,6 +261,11 @@
 
             // 更新搜索结果显示
             function updateResults(results, searchText) {
+                if (currentSelectedItem) {
+                    currentSelectedItem.classList.remove('selected');
+                    currentSelectedItem = null;
+                }
+                
                 const summaryTextEl = document.getElementById('summary-text');
                 const resultsEl = document.getElementById('results');
                 
@@ -300,4 +322,3 @@
     </script>
 </body>
 </html>
-``` 
