@@ -364,11 +364,21 @@ class SearchResultsProvider implements vscode.WebviewViewProvider {
             const writeColor = config.get<string>('colors.write');
             this._searchText = searchText;
 
-            this._currentSearchResults = { results, searchText };
+            // 获取当前活动编辑器的文件路径
+            const currentFilePath = vscode.window.activeTextEditor?.document.uri.fsPath;
+
+            // 对结果进行排序：当前文档优先
+            const sortedResults = [...results].sort((a, b) => {
+                if (currentFilePath === a.file) {return -1;}
+                if (currentFilePath === b.file) {return 1;}
+                return 0;
+            });
+
+            this._currentSearchResults = { results: sortedResults, searchText };
             this._view.show(true);
             this._view.webview.postMessage({ 
                 type: 'results', 
-                results,
+                results: sortedResults,
                 searchText,
                 colors: {
                     read: readColor,
