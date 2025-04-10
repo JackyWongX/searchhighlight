@@ -493,11 +493,22 @@ export function activate(context: vscode.ExtensionContext) {
             }
 
             const selection = editor.selection;
-            const searchText = editor.document.getText(selection);
+            let searchText = editor.document.getText(selection);
+            
+            // 如果没有选中文本，则获取光标所在位置的单词
+            if (!searchText) {
+                console.log('没有选中文本，尝试获取光标所在单词...');
+                const position = editor.selection.active;
+                const wordRange = editor.document.getWordRangeAtPosition(position);
+                if (wordRange) {
+                    searchText = editor.document.getText(wordRange);
+                    console.log('获取到光标所在单词:', searchText);
+                }
+            }
             
             if (!searchText) {
-                console.log('没有选中要搜索的文本');
-                vscode.window.showInformationMessage('请先选择要搜索的文本');
+                console.log('没有找到可搜索的文本');
+                vscode.window.showInformationMessage('请选择或将光标置于要搜索的文本上');
                 return;
             }
             
