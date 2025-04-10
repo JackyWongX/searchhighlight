@@ -1,9 +1,20 @@
-# Change Log
+# 更新日志
 
-All notable changes to the "searchhighlight" extension will be documented in this file.
+## [1.0.5] - 2025-04-10
+- 跳转到文档后根据读写属性高亮所有搜索结果，按Esc或切换文档后取消高亮
 
-Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
+## [1.0.4] - 2025-04-10
+- 添加大小写敏感和全词匹配控制，支持过滤特定后缀文件
 
-## [Unreleased]
+## [1.0.3] - 2025-04-08
+- 跳转后高亮显示搜索的文本
 
-- Initial release
+## [1.0.2] - 2025-04-08
+- 修复bug和优化显示效果
+
+## [1.0.1] - 2025-04-08
+- 使用rg.exe提高大型项目中的搜索速度
+
+## [1.0.0] - 2025-04-08
+- 初始版本
+- 搜索字符串并根据字符的读写属性显示不同的颜色

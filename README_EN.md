@@ -16,14 +16,6 @@ SearchHighlight is a VSCode extension for searching code identifiers such as var
 - Case sensitivity and whole word match control
 - File extension filtering support
 
-## Version History
-- 1.0.0 Initial release with read/write highlighting
-- 1.0.1 Using rg.exe for better performance in large projects
-- 1.0.2 Bug fixes and display improvements
-- 1.0.3 Added text highlighting after jumping to location
-- 1.0.4 Added case sensitivity and whole word match control, file extension filtering
-- 1.0.5 Highlight all search results based on read and write properties after jumping to a document, press Esc or unhighlight the document after switching
-
 ## Usage
 
 1. Select the text you want to search in the editor
