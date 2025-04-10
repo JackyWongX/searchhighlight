@@ -76,17 +76,18 @@
                 "--"
               ],
               "methods": [
-                ".append",
-                ".add",
-                ".insert",
-                ".remove",
-                ".delete",
-                ".clear",
-                ".set",
-                ".push",
-                ".pop",
-                ".shift",
-                ".unshift"
+                "append",
+                "add",
+                "insert",
+                "remove",
+                "delete",
+                "clear",
+                "set",
+                "push",
+                "pop",
+                "shift",
+                "unshift",
+                "push_back"
               ],
               "excludeOperators": [
                 "==",

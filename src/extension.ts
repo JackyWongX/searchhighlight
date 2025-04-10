@@ -3,13 +3,6 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as cp from 'child_process';
 
-// 定义接口
-interface PatternConfig {
-    pattern: string;
-    description: string;
-    examples: string[];
-}
-
 interface WritePatterns {
     [key: string]: {
         operators: string[];
@@ -44,56 +37,34 @@ class WriteOperationDetector {
         this.patterns = this.loadPatternsFromConfig();
         this.patternCache.clear();
     }
-
-    private getFileLanguage(filePath: string): string {
-        const ext = path.extname(filePath).toLowerCase();
-        switch (ext) {
-            case '.py':
-                return 'python';
-            case '.js':
-            case '.ts':
-            case '.jsx':
-            case '.tsx':
-                return 'javascript';
-            case '.java':
-                return 'java';
-            case '.cpp':
-            case '.hpp':
-            case '.cc':
-            case '.h':
-                return 'cpp';
-            default:
-                return 'common';
-        }
-    }
-
+    
     public isWriteOperation(lineText: string): boolean {
         const patterns = this.patterns.common;
-        
-        if (!patterns || !lineText) {
+        const checkText = lineText.trim();
+        if (!patterns || !checkText) {
             return false;
         }
 
-        // 获取第一个非空白字符
-        const firstNonWhitespace = lineText.trim()[0];
-        if (!firstNonWhitespace) {
-            return false;
-        }
-
-        // 1. 如果以.开头，检查是否是写操作方法
-        if (firstNonWhitespace === '.') {
+        // 如果以.开头，检查是否是写操作方法
+        if (checkText.startsWith('.')) {
             return patterns.methods.some(method => 
-                lineText.trim().startsWith(method));
+                checkText.startsWith('.' + method));
         }
 
-        // 2. 检查第一个非空白字符是否是操作符
-        if (patterns.operators.includes(firstNonWhitespace)) {
+        // 如果以->开头，检查是否是写操作方法（C++指针操作）
+        if (checkText.startsWith('->')) {
+            return patterns.methods.some(method => 
+                checkText.startsWith('->' + method));
+        }
+
+        // 检查第一个非空白字符是否是操作符
+        if (patterns.operators.includes(checkText[0])) {
             // 排除比较操作符
             return !patterns.excludeOperators?.some(op => 
-                lineText.trim().startsWith(op));
+                checkText.startsWith(op));
         }
 
-        // 3. 如果第一个字符既不是.也不是操作符，返回false
+        // 如果第一个字符既不是.也不是操作符，返回false
         return false;
     }
 }
@@ -231,7 +202,6 @@ class RipGrepSearch {
                         const content = line.substring(secondColonAfterDot + 1).trim();
                         // 若content是注释的则跳过
                         if (content.startsWith('//') || content.startsWith('#')) {
-                            console.warn('跳过注释行:', content);
                             continue;
                         }
 
