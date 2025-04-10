@@ -436,76 +436,116 @@ class SearchResultsProvider implements vscode.WebviewViewProvider {
 }
 
 export function activate(context: vscode.ExtensionContext) {
-    const searchResultsProvider = new SearchResultsProvider(context.extensionUri);
-    const viewDisposable = vscode.window.registerWebviewViewProvider('searchHighlightResults', searchResultsProvider);
-    context.subscriptions.push(viewDisposable);
+    console.log('SearchHighlight 插件开始激活...');
+    
+    try {
+        console.log('正在创建 SearchResultsProvider...');
+        const searchResultsProvider = new SearchResultsProvider(context.extensionUri);
+        console.log('正在注册 WebviewViewProvider...');
+        const viewDisposable = vscode.window.registerWebviewViewProvider('searchHighlightResults', searchResultsProvider);
+        context.subscriptions.push(viewDisposable);
+        console.log('WebviewViewProvider 注册成功');
 
-    // 修改确保视图可见的函数
-    async function ensureViewIsVisible() {
-        // 只使用一个命令打开视图容器即可
-        await vscode.commands.executeCommand('workbench.view.extension.search-highlight');
-    }
-
-    // 注册 focus 命令
-    context.subscriptions.push(
-        vscode.commands.registerCommand('searchhighlight.focus', () => {
-            return ensureViewIsVisible();
-        })
-    );
-
-    // 监听配置变更
-    context.subscriptions.push(
-        vscode.workspace.onDidChangeConfiguration(e => {
-            if (e.affectsConfiguration('searchhighlight.patterns') ||
-                e.affectsConfiguration('searchhighlight.colors')) {
-                writeDetector.reloadPatterns();
-                searchResultsProvider.updateCurrentResults();
-                vscode.window.showInformationMessage('搜索高亮配置已更新');
-            }
-        })
-    );
-
-    let disposable = vscode.commands.registerCommand('searchhighlight.searchAndHighlight', async () => {
-        const editor = vscode.window.activeTextEditor;
-        if (!editor) {
-            return;
-        }
-
-        const selection = editor.selection;
-        const searchText = editor.document.getText(selection);
-        
-        if (!searchText) {
-            vscode.window.showInformationMessage('请先选择要搜索的文本');
-            return;
-        }
-        
-        // 确保搜索结果视图是可见的
-        await ensureViewIsVisible();
-
-        // 显示进度提示
-        vscode.window.withProgress({
-            location: vscode.ProgressLocation.Notification,
-            title: `搜索 "${searchText}"`,
-            cancellable: true
-        }, async (progress) => {
+        // 修改确保视图可见的函数
+        async function ensureViewIsVisible() {
+            console.log('正在确保视图可见...');
             try {
-                // 使用 ripgrep 执行搜索
-                const results = await ripGrepSearch.search(searchText);
-                
-                // 更新搜索结果视图
-                searchResultsProvider.showResults(results, searchText);
-
-                // 显示统计信息
-                const writeCount = results.filter(r => r.isWrite).length;
-                const readCount = results.length - writeCount;
+                await vscode.commands.executeCommand('workbench.view.extension.search-highlight');
+                console.log('视图已显示');
             } catch (error) {
-                console.error('Search error:', error);
-                vscode.window.showErrorMessage('搜索过程中发生错误');
+                console.error('显示视图时出错:', error);
+            }
+        }
+
+        // 注册 focus 命令
+        console.log('正在注册 focus 命令...');
+        context.subscriptions.push(
+            vscode.commands.registerCommand('searchhighlight.focus', () => {
+                console.log('执行 focus 命令...');
+                return ensureViewIsVisible();
+            })
+        );
+        console.log('focus 命令注册成功');
+
+        // 监听配置变更
+        console.log('正在注册配置变更监听器...');
+        context.subscriptions.push(
+            vscode.workspace.onDidChangeConfiguration(e => {
+                console.log('配置发生变更:', e.affectsConfiguration('searchhighlight'));
+                if (e.affectsConfiguration('searchhighlight.patterns') ||
+                    e.affectsConfiguration('searchhighlight.colors')) {
+                    console.log('更新写操作检测规则和颜色配置');
+                    writeDetector.reloadPatterns();
+                    searchResultsProvider.updateCurrentResults();
+                    vscode.window.showInformationMessage('搜索高亮配置已更新');
+                }
+            })
+        );
+        console.log('配置变更监听器注册成功');
+
+        console.log('正在注册主搜索命令...');
+        let disposable = vscode.commands.registerCommand('searchhighlight.searchAndHighlight', async () => {
+            console.log('执行搜索命令...');
+            const editor = vscode.window.activeTextEditor;
+            if (!editor) {
+                console.log('没有活动的编辑器');
+                return;
+            }
+
+            const selection = editor.selection;
+            const searchText = editor.document.getText(selection);
+            
+            if (!searchText) {
+                console.log('没有选中要搜索的文本');
+                vscode.window.showInformationMessage('请先选择要搜索的文本');
+                return;
+            }
+            
+            console.log('搜索文本:', searchText);
+            
+            try {
+                // 确保搜索结果视图是可见的
+                console.log('正在显示搜索结果视图...');
+                await ensureViewIsVisible();
+
+                // 显示进度提示
+                await vscode.window.withProgress({
+                    location: vscode.ProgressLocation.Notification,
+                    title: `搜索 "${searchText}"`,
+                    cancellable: true
+                }, async (progress) => {
+                    try {
+                        console.log('开始执行搜索...');
+                        // 使用 ripgrep 执行搜索
+                        const results = await ripGrepSearch.search(searchText);
+                        console.log(`搜索完成，找到 ${results.length} 个结果`);
+                        
+                        // 更新搜索结果视图
+                        searchResultsProvider.showResults(results, searchText);
+
+                        // 显示统计信息
+                        const writeCount = results.filter(r => r.isWrite).length;
+                        const readCount = results.length - writeCount;
+                        console.log(`读操作: ${readCount}, 写操作: ${writeCount}`);
+                    } catch (error) {
+                        console.error('搜索过程中发生错误:', error);
+                        vscode.window.showErrorMessage('搜索过程中发生错误');
+                    }
+                });
+            } catch (error) {
+                console.error('命令执行过程中发生错误:', error);
+                vscode.window.showErrorMessage('执行搜索命令时发生错误');
             }
         });
-    });
 
-    context.subscriptions.push(disposable);
+        context.subscriptions.push(disposable);
+        console.log('主搜索命令注册成功');
+        console.log('SearchHighlight 插件激活完成');
+
+    } catch (error) {
+        console.error('插件激活过程中发生错误:', error);
+        throw error; // 重新抛出错误以便 VS Code 可以捕获并显示
+    }
 }
 
 export function deactivate() {

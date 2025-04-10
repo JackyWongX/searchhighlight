@@ -9,5 +9,4 @@ src/**
 .gitignore
 images/展示.gif
 images/*.gif
-node_modules/**
 out/test/**
