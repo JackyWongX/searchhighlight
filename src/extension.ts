@@ -450,16 +450,6 @@ class SearchResultsProvider implements vscode.WebviewViewProvider {
         // 注册事件监听器清除高亮
         const disposables: vscode.Disposable[] = [];
         
-        // Escape 键监听
-        disposables.push(
-            vscode.commands.registerCommand('type', (args) => {
-                if (args.text === '\u001b') { // Escape key
-                    this.clearDecorations();
-                    disposables.forEach(d => d.dispose());
-                }
-            })
-        );
-        
         // 文档切换监听
         disposables.push(
             vscode.window.onDidChangeActiveTextEditor(() => {
