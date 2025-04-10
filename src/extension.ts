@@ -2,6 +2,8 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as cp from 'child_process';
+import * as jschardet from 'jschardet';
+import * as iconv from 'iconv-lite';
 
 interface WritePatterns {
     [key: string]: {
@@ -130,18 +132,49 @@ class RipGrepSearch {
                 
                 const rg = cp.spawn(this.rgPath, rgArgs, {
                     stdio: ['pipe', 'pipe', 'pipe'],
-                    windowsHide: true
+                    windowsHide: true,
+                    env: {
+                        ...process.env,
+                        LANG: 'zh_CN.UTF-8',
+                        LC_ALL: 'zh_CN.UTF-8'
+                    }
                 });
                 
                 let output = '';
                 let errorOutput = '';
 
                 rg.stdout.on('data', (data: Buffer) => {
-                    output += data.toString();
+                    // 检测编码
+                    const detected = jschardet.detect(data);
+                    const encoding = detected.encoding || 'utf8';
+                    
+                    // 使用检测到的编码解码内容
+                    if (encoding.toLowerCase() === 'utf-8' || encoding.toLowerCase() === 'ascii') {
+                        output += data.toString('utf8');
+                    } else {
+                        try {
+                            output += iconv.decode(data, encoding);
+                        } catch (e) {
+                            console.error(`解码错误(${encoding}):`, e);
+                            output += data.toString('utf8'); // 降级到 UTF-8
+                        }
+                    }
                 });
 
                 rg.stderr.on('data', (data: Buffer) => {
-                    errorOutput += data.toString();
+                    const detected = jschardet.detect(data);
+                    const encoding = detected.encoding || 'utf8';
+                    
+                    if (encoding.toLowerCase() === 'utf-8' || encoding.toLowerCase() === 'ascii') {
+                        errorOutput += data.toString('utf8');
+                    } else {
+                        try {
+                            errorOutput += iconv.decode(data, encoding);
+                        } catch (e) {
+                            console.error(`解码错误(${encoding}):`, e);
+                            errorOutput += data.toString('utf8');
+                        }
+                    }
                 });
 
                 rg.on('error', (err) => {
@@ -301,11 +334,17 @@ class SearchResultsProvider implements vscode.WebviewViewProvider {
             const writeColor = config.get<string>('colors.write');
             this._searchText = searchText;
 
-            this._currentSearchResults = { results, searchText };
+            // 确保结果正确编码
+            const encodedResults = results.map(result => ({
+                ...result,
+                lineContent: Buffer.from(result.lineContent).toString('utf8')
+            }));
+
+            this._currentSearchResults = { results: encodedResults, searchText };
             this._view.show(true);
             this._view.webview.postMessage({ 
                 type: 'results', 
-                results, 
+                results: encodedResults, 
                 searchText,
                 colors: {
                     read: readColor,
@@ -323,7 +362,7 @@ class SearchResultsProvider implements vscode.WebviewViewProvider {
 
     private _getHtmlForWebview() {
         const webviewPath = path.join(this._extensionUri.fsPath, 'src', 'webview.html');
-        let html = fs.readFileSync(webviewPath, 'utf8');
+        let html = fs.readFileSync(webviewPath, { encoding: 'utf8' });
         return html;
     }
 
