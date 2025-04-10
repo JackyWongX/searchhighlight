@@ -150,6 +150,37 @@
           "type": "boolean",
           "default": true,
           "description": "是否区分大小写"
+        },
+        "searchhighlight.excludeFileExtensions": {
+          "type": "array",
+          "default": [
+            ".pb.h",
+            ".pb.cc",
+            ".generated.h",
+            ".generated.cpp",
+            ".g.cs",
+            ".designer.cs",
+            ".min.js",
+            ".min.css",
+            ".d.ts",
+            ".map",
+            ".pyc",
+            ".pyo",
+            ".pyd",
+            ".dll",
+            ".exe",
+            ".so",
+            ".dylib",
+            ".lib",
+            ".obj",
+            ".o",
+            ".class",
+            ".cache"
+          ],
+          "description": "要排除的文件后缀列表。这些后缀的文件将在搜索时被忽略。",
+          "items": {
+            "type": "string"
+          }
         }
       }
     }

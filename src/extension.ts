@@ -102,17 +102,25 @@ class RipGrepSearch {
             return results;
         }
 
-        // 从配置中获取搜索选项
+        // 从配置中获取搜索选项和过滤规则
         const config = vscode.workspace.getConfiguration('searchhighlight');
         const caseSensitive = config.get<boolean>('caseSensitive', true);
         const matchWholeWord = config.get<boolean>('matchWholeWord', true);
-
-        // 从配置中获取排除目录
         const excludeDirs = config.get<string[]>('excludePatterns') || [];
-        const excludeArgs = excludeDirs.flatMap(dir => [
-            '--glob', 
-            `!${dir.startsWith('**/') ? dir : `**/${dir}`}`
-        ]);
+        const excludeExts = config.get<string[]>('excludeFileExtensions') || [];
+
+        // 构建排除目录的 glob 模式
+        const excludeArgs = [
+            ...excludeDirs.flatMap(dir => [
+                '--glob',
+                `!${dir.startsWith('**/') ? dir : `**/${dir}`}`
+            ]),
+            // 添加文件后缀过滤
+            ...excludeExts.flatMap(ext => [
+                '--glob',
+                `!**/*${ext}`
+            ])
+        ];
 
         const searchPromises = workspaceFolders.map(folder => {
             return new Promise<SearchResult[]>((resolve, reject) => {
@@ -126,10 +134,10 @@ class RipGrepSearch {
                     '--fixed-strings',   // 按字面字符串搜索
                     ...(matchWholeWord ? ['--word-regexp'] : []), // 全词匹配
                     ...(caseSensitive ? [] : ['-i']), // 不区分大小写
-                    ...excludeArgs,      // 排除目录
-                    '--',                // 分隔符，确保后面的参数不被解析为选项
+                    ...excludeArgs,      // 排除目录和文件后缀
+                    '--',                // 分隔符
                     searchText,          // 搜索模式
-                    folder.uri.fsPath   // 搜索路径
+                    folder.uri.fsPath    // 搜索路径
                 ];
 
                 console.log(`执行命令: ${this.rgPath} ${rgArgs.join(' ')}`);
