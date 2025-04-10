@@ -491,7 +491,15 @@ export function activate(context: vscode.ExtensionContext) {
         console.log('正在创建 SearchResultsProvider...');
         const searchResultsProvider = new SearchResultsProvider(context.extensionUri);
         console.log('正在注册 WebviewViewProvider...');
-        const viewDisposable = vscode.window.registerWebviewViewProvider('searchHighlightResults', searchResultsProvider);
+        const viewDisposable = vscode.window.registerWebviewViewProvider(
+            'searchHighlightResults',
+            searchResultsProvider,
+            {
+                webviewOptions: {
+                    retainContextWhenHidden: true  // 切换视图时保持 WebView 内容
+                }
+            }
+        );
         context.subscriptions.push(viewDisposable);
         console.log('WebviewViewProvider 注册成功');
 
