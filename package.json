@@ -2,7 +2,7 @@
   "name": "searchhighlight",
   "displayName": "SearchHighlight",
   "description": "SearchHighlight主要功能是搜索代码变量和函数以及其他字符并根据搜索到的字符串所在行中的读写属性来显示不同的颜色",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "engines": {
     "vscode": "^1.80.0"
   },
@@ -48,6 +48,10 @@
       {
         "command": "searchhighlight.focus",
         "title": "Focus Search Results View"
+      },
+      {
+        "command": "searchhighlight.clearHighlight",
+        "title": "Clear Search Highlighting"
       }
     ],
     "keybindings": [
@@ -56,6 +60,11 @@
         "key": "ctrl+shift+f",
         "mac": "cmd+shift+f",
         "when": "editorFocus && editorTextFocus"
+      },
+      {
+        "command": "searchhighlight.clearHighlight",
+        "key": "escape",
+        "when": "editorTextFocus"
       }
     ],
     "configuration": {

@@ -469,7 +469,7 @@ class SearchResultsProvider implements vscode.WebviewViewProvider {
         );
     }
 
-    private clearDecorations() {
+    public clearDecorations() {
         this._currentDecorationTypes.forEach(decoration => decoration.dispose());
         this._currentDecorationTypes = [];
     }
@@ -531,6 +531,20 @@ export function activate(context: vscode.ExtensionContext) {
             })
         );
         console.log('配置变更监听器注册成功');
+
+        // 注册clearHighlight命令
+        console.log('正在注册清除高亮命令...');
+        context.subscriptions.push(
+            vscode.commands.registerCommand('searchhighlight.clearHighlight', () => {
+                console.log('执行清除高亮命令...');
+                const editor = vscode.window.activeTextEditor;
+                if (editor) {
+                    searchResultsProvider.clearDecorations();
+                } else {
+                    console.log('没有活动的编辑器，无法清除高亮');
+                }
+            })
+        );
 
         console.log('正在注册主搜索命令...');
         let disposable = vscode.commands.registerCommand('searchhighlight.searchAndHighlight', async () => {
