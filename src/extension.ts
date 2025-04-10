@@ -102,8 +102,12 @@ class RipGrepSearch {
             return results;
         }
 
-        // 从配置中获取排除目录
+        // 从配置中获取搜索选项
         const config = vscode.workspace.getConfiguration('searchhighlight');
+        const caseSensitive = config.get<boolean>('caseSensitive', true);
+        const matchWholeWord = config.get<boolean>('matchWholeWord', true);
+
+        // 从配置中获取排除目录
         const excludeDirs = config.get<string[]>('excludePatterns') || [];
         const excludeArgs = excludeDirs.flatMap(dir => [
             '--glob', 
@@ -120,8 +124,8 @@ class RipGrepSearch {
                     '--no-ignore',       // 不使用 ignore 文件
                     '--max-columns=1000', // 限制每行最大长度
                     '--fixed-strings',   // 按字面字符串搜索
-                    '--word-regexp',     // 全词匹配 (新增)
-                    '--case-sensitive',  // 不忽略大小写 (新增)
+                    ...(matchWholeWord ? ['--word-regexp'] : []), // 全词匹配
+                    ...(caseSensitive ? [] : ['-i']), // 不区分大小写
                     ...excludeArgs,      // 排除目录
                     '--',                // 分隔符，确保后面的参数不被解析为选项
                     searchText,          // 搜索模式
@@ -296,6 +300,14 @@ class SearchResultsProvider implements vscode.WebviewViewProvider {
         this._extensionUri = extensionUri;
     }
 
+    private _getSearchOptions() {
+        const config = vscode.workspace.getConfiguration('searchhighlight');
+        return {
+            caseSensitive: config.get<boolean>('caseSensitive', true),
+            matchWholeWord: config.get<boolean>('matchWholeWord', true)
+        };
+    }
+
     public resolveWebviewView(
         webviewView: vscode.WebviewView,
         context: vscode.WebviewViewResolveContext,
@@ -323,6 +335,15 @@ class SearchResultsProvider implements vscode.WebviewViewProvider {
                     );
                     this.highlightSearchText(editor, this._searchText, message.line);
                     break;
+                case 'updateOption':
+                    const config = vscode.workspace.getConfiguration('searchhighlight');
+                    await config.update(message.option, message.value, vscode.ConfigurationTarget.Global);
+                    if (this._currentSearchResults) {
+                        // 重新执行搜索以应用新设置
+                        const results = await ripGrepSearch.search(this._currentSearchResults.searchText);
+                        this.showResults(results, this._currentSearchResults.searchText);
+                    }
+                    break;
             }
         });
     }
@@ -334,22 +355,17 @@ class SearchResultsProvider implements vscode.WebviewViewProvider {
             const writeColor = config.get<string>('colors.write');
             this._searchText = searchText;
 
-            // 确保结果正确编码
-            const encodedResults = results.map(result => ({
-                ...result,
-                lineContent: Buffer.from(result.lineContent).toString('utf8')
-            }));
-
-            this._currentSearchResults = { results: encodedResults, searchText };
+            this._currentSearchResults = { results, searchText };
             this._view.show(true);
             this._view.webview.postMessage({ 
                 type: 'results', 
-                results: encodedResults, 
+                results,
                 searchText,
                 colors: {
                     read: readColor,
                     write: writeColor
-                }
+                },
+                searchOptions: this._getSearchOptions()
             });
         }
     }

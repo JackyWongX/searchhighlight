@@ -140,6 +140,16 @@
           "items": {
             "type": "string"
           }
+        },
+        "searchhighlight.matchWholeWord": {
+          "type": "boolean",
+          "default": true,
+          "description": "是否全词匹配"
+        },
+        "searchhighlight.caseSensitive": {
+          "type": "boolean",
+          "default": true,
+          "description": "是否区分大小写"
         }
       }
     }

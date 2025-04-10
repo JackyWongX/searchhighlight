@@ -88,11 +88,41 @@
             padding: 8px;
             background-color: var(--vscode-editor-background);
             border-radius: 4px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .controls {
+            display: flex;
+            gap: 8px;
+        }
+        .control-button {
+            padding: 4px 8px;
+            color: var(--vscode-button-foreground);
+            border: none;
+            border-radius: 2px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            font-size: 12px;
+            background: var(--vscode-button-secondaryBackground);
+        }
+        .control-button.active {
+            background: var(--vscode-button-background);
+        }
+        .control-button:hover {
+            background: var(--vscode-button-background);
         }
     </style>
 </head>
 <body>
-    <div class="summary" id="summary"></div>
+    <div class="summary" id="summary">
+        <div id="summary-text"></div>
+        <div class="controls">
+            <button class="control-button" id="caseSensitiveBtn" title="区分大小写">Aa</button>
+            <button class="control-button" id="wholeWordBtn" title="全词匹配">\\b</button>
+        </div>
+    </div>
     <div id="results"></div>
     <script>
         (function() {
@@ -100,6 +130,10 @@
             let currentColors = {
                 read: 'rgba(64, 200, 64, 0.2)',
                 write: 'rgba(240, 64, 64, 0.2)'
+            };
+            let searchOptions = {
+                caseSensitive: true,
+                matchWholeWord: true
             };
             
             // 更新样式
@@ -116,6 +150,24 @@
                 document.head.appendChild(style);
             }
             
+            // 更新按钮状态
+            function updateButtonStates() {
+                const caseSensitiveBtn = document.getElementById('caseSensitiveBtn');
+                const wholeWordBtn = document.getElementById('wholeWordBtn');
+                
+                if (searchOptions.caseSensitive) {
+                    caseSensitiveBtn.classList.add('active');
+                } else {
+                    caseSensitiveBtn.classList.remove('active');
+                }
+                
+                if (searchOptions.matchWholeWord) {
+                    wholeWordBtn.classList.add('active');
+                } else {
+                    wholeWordBtn.classList.remove('active');
+                }
+            }
+
             // 处理点击事件
             document.addEventListener('click', (e) => {
                 const fileHeader = e.target.closest('.file-header');
@@ -140,6 +192,31 @@
                 }
             });
 
+            // 处理按钮点击事件
+            document.getElementById('caseSensitiveBtn').addEventListener('click', () => {
+                const newValue = !searchOptions.caseSensitive;
+                searchOptions.caseSensitive = newValue; // 先更新本地状态
+                updateButtonStates(); // 然后更新按钮视觉状态
+                // 最后发送配置更新消息
+                vscode.postMessage({
+                    type: 'updateOption',
+                    option: 'caseSensitive',
+                    value: newValue
+                });
+            });
+
+            document.getElementById('wholeWordBtn').addEventListener('click', () => {
+                const newValue = !searchOptions.matchWholeWord;
+                searchOptions.matchWholeWord = newValue; // 先更新本地状态
+                updateButtonStates(); // 然后更新按钮视觉状态
+                // 最后发送配置更新消息
+                vscode.postMessage({
+                    type: 'updateOption',
+                    option: 'matchWholeWord',
+                    value: newValue
+                });
+            });
+            
             // 处理来自扩展的消息
             window.addEventListener('message', event => {
                 const message = event.data;
@@ -149,7 +226,15 @@
                             currentColors = message.colors;
                             updateColors(currentColors);
                         }
+                        if (message.searchOptions) {
+                            searchOptions = message.searchOptions;
+                            updateButtonStates();
+                        }
                         updateResults(message.results, message.searchText);
+                        break;
+                    case 'updateSearchOptions':
+                        searchOptions = message.searchOptions;
+                        updateButtonStates();
                         break;
                 }
             });
@@ -159,7 +244,7 @@
 
             // 更新搜索结果显示
             function updateResults(results, searchText) {
-                const summaryEl = document.getElementById('summary');
+                const summaryTextEl = document.getElementById('summary-text');
                 const resultsEl = document.getElementById('results');
                 
                 // 统计读写操作数量
@@ -167,7 +252,7 @@
                 const readCount = results.length - writeCount;
                 
                 // 更新统计信息
-                summaryEl.textContent = `找到 ${results.length} 处匹配：${readCount} 处读操作，${writeCount} 处写操作`;
+                summaryTextEl.textContent = `找到 ${results.length} 处匹配：${readCount} 处读操作，${writeCount} 处写操作`;
                 
                 // 按文件分组结果
                 const groupedResults = {};
@@ -215,3 +300,4 @@
     </script>
 </body>
 </html>
+``` 
