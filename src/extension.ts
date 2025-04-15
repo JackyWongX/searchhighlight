@@ -458,7 +458,6 @@ class SearchResultsProvider implements vscode.WebviewViewProvider {
         for (let i = 0; i < editor.document.lineCount; i++) {
             const line = editor.document.lineAt(i);
             let match;
-            
             while ((match = searchRegex.exec(line.text)) !== null) {
                 const startPos = new vscode.Position(i, match.index);
                 const endPos = new vscode.Position(i, match.index + match[0].length);
