@@ -580,12 +580,7 @@ export function activate(context: vscode.ExtensionContext) {
                 const editor = vscode.window.activeTextEditor;
                 if (editor) {
                     searchResultsProvider.clearDecorations();
-                } else {
-                    console.log('没有活动的编辑器，无法清除高亮');
                 }
-
-                // 转发 Escape 键事件
-                await vscode.commands.executeCommand('default:escape');
             })
         );
 
