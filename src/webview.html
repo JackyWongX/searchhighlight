@@ -287,16 +287,21 @@
 
                 // 生成分组后的 HTML
                 resultsEl.innerHTML = Object.entries(groupedResults).map(([file, fileResults]) => {
+                    // 按行号升序排序
+                    fileResults.sort((a, b) => a.line - b.line);
+                    
                     // 从第一个结果中获取文件名
                     const fileName = fileResults[0].fileName;
                     const resultItems = fileResults.map(result => {
-                        const line = result.lineContent.trimLeft();
+                        const line = result.lineContent;
                         const highlightClass = result.isWrite ? 'highlight-write' : 'highlight-read';
-                        const escapedSearchText = searchText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                        const highlightedLine = line.replace(
-                            new RegExp(escapedSearchText, 'g'),
-                            `<span class="${highlightClass}">$&</span>`
-                        );
+                        
+                        // 创建带有高亮的行内容
+                        const beforeMatch = line.substring(0, result.matchStart);
+                        const match = line.substring(result.matchStart, result.matchEnd);
+                        const afterMatch = line.substring(result.matchEnd);
+                        
+                        const highlightedLine = `${beforeMatch}<span class="${highlightClass}">${match}</span>${afterMatch}`;
                         
                         return `
                             <div class="result-item" data-file="${result.file}" data-line="${result.line}">

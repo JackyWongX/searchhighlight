@@ -19,6 +19,8 @@ interface SearchResult {
     line: number;
     lineContent: string;
     isWrite: boolean;
+    matchStart?: number;
+    matchEnd?: number;
 }
 
 // 写操作检测类
@@ -250,16 +252,39 @@ class RipGrepSearch {
                             continue;
                         }
 
-                        // 获取searchText后面的内容
-                        const searchTextIndex = content.indexOf(searchText);
-                        const searchTextEnd = content.substring(searchTextIndex+searchText.length);
-                        fileResults.push({
-                            file: filePath,
-                            fileName: path.basename(filePath),
-                            line: parseInt(lineNum) - 1, // 转换为0-based索引
-                            lineContent: content,
-                            isWrite: writeDetector.isWriteOperation(searchTextEnd)
-                        });
+                        // 构建搜索正则表达式，应用和highlightSearchText相同的逻辑
+                        const flags = caseSensitive ? 'g' : 'gi';
+                        const wordBoundary = matchWholeWord ? '\\b' : '';
+                        const escapedSearchText = searchText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                        const searchRegex = new RegExp(`${wordBoundary}${escapedSearchText}${wordBoundary}`, flags);
+
+                        let match;
+                        let matches = [];
+                        while ((match = searchRegex.exec(content)) !== null) {
+                            // 对每个匹配项判断其后面的文本是否为写操作
+                            const afterText = content.substring(match.index + match[0].length).trim();
+                            const isWrite = writeDetector.isWriteOperation(afterText);
+                            matches.push({
+                                start: match.index,
+                                end: match.index + match[0].length,
+                                isWrite: isWrite
+                            });
+                        }
+
+                        // 如果找到匹配项，将每个匹配项以及其写操作状态加入到结果中
+                        if (matches.length > 0) {
+                            matches.forEach(match => {
+                                fileResults.push({
+                                    file: filePath,
+                                    fileName: path.basename(filePath),
+                                    line: parseInt(lineNum) - 1,
+                                    lineContent: content,
+                                    isWrite: match.isWrite,
+                                    matchStart: match.start,    // 添加匹配位置信息
+                                    matchEnd: match.end
+                                });
+                            });
+                        }
                     }
 
                     resolve(fileResults);
