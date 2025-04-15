@@ -65,7 +65,7 @@
       {
         "command": "searchhighlight.clearHighlight",
         "key": "escape",
-        "when": "editorTextFocus"
+        "when": "editorTextFocus && searchHighlightActive"
       }
     ],
     "configuration": {

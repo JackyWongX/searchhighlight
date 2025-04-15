@@ -209,7 +209,6 @@ class RipGrepSearch {
                     }
 
                     //console.log(`搜索结果 : ${output}`);
-
                     const fileResults: SearchResult[] = [];
                     const lines = output.split('\n');
 
@@ -479,8 +478,12 @@ class SearchResultsProvider implements vscode.WebviewViewProvider {
         }
         
         // 应用高亮
-        editor.setDecorations(readDecorationType, readDecorations);
-        editor.setDecorations(writeDecorationType, writeDecorations);
+        if (readDecorations.length > 0 || writeDecorations.length > 0) {
+            editor.setDecorations(readDecorationType, readDecorations);
+            editor.setDecorations(writeDecorationType, writeDecorations);
+            // 设置上下文变量，标记有高亮存在
+            vscode.commands.executeCommand('setContext', 'searchHighlightActive', true);
+        }
         
         // 注册事件监听器清除高亮
         const disposables: vscode.Disposable[] = [];
@@ -495,8 +498,12 @@ class SearchResultsProvider implements vscode.WebviewViewProvider {
     }
 
     public clearDecorations() {
-        this._currentDecorationTypes.forEach(decoration => decoration.dispose());
-        this._currentDecorationTypes = [];
+        if (this._currentDecorationTypes.length > 0) {
+            this._currentDecorationTypes.forEach(decoration => decoration.dispose());
+            this._currentDecorationTypes = [];
+            // 清除上下文变量，取消高亮状态
+            vscode.commands.executeCommand('setContext', 'searchHighlightActive', false);
+        }
     }
 
     public dispose() {
@@ -568,7 +575,7 @@ export function activate(context: vscode.ExtensionContext) {
         // 注册clearHighlight命令
         console.log('正在注册清除高亮命令...');
         context.subscriptions.push(
-            vscode.commands.registerCommand('searchhighlight.clearHighlight', () => {
+            vscode.commands.registerCommand('searchhighlight.clearHighlight', async () => {
                 console.log('执行清除高亮命令...');
                 const editor = vscode.window.activeTextEditor;
                 if (editor) {
@@ -576,6 +583,9 @@ export function activate(context: vscode.ExtensionContext) {
                 } else {
                     console.log('没有活动的编辑器，无法清除高亮');
                 }
+
+                // 转发 Escape 键事件
+                await vscode.commands.executeCommand('default:escape');
             })
         );
 
