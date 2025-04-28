@@ -143,7 +143,7 @@
                 matchWholeWord: true
             };
             let currentSelectedItem = null;
-            
+
             // 更新样式
             function updateColors(colors) {
                 const style = document.createElement('style');
@@ -157,18 +157,18 @@
                 `;
                 document.head.appendChild(style);
             }
-            
+
             // 更新按钮状态
             function updateButtonStates() {
                 const caseSensitiveBtn = document.getElementById('caseSensitiveBtn');
                 const wholeWordBtn = document.getElementById('wholeWordBtn');
-                
+
                 if (searchOptions.caseSensitive) {
                     caseSensitiveBtn.classList.add('active');
                 } else {
                     caseSensitiveBtn.classList.remove('active');
                 }
-                
+
                 if (searchOptions.matchWholeWord) {
                     wholeWordBtn.classList.add('active');
                 } else {
@@ -195,11 +195,11 @@
                     if (currentSelectedItem) {
                         currentSelectedItem.classList.remove('selected');
                     }
-                    
+
                     // 设置新的选中状态
                     resultItem.classList.add('selected');
                     currentSelectedItem = resultItem;
-                    
+
                     const { file, line } = resultItem.dataset;
                     vscode.postMessage({
                         type: 'jump',
@@ -233,7 +233,7 @@
                     value: newValue
                 });
             });
-            
+
             // 处理来自扩展的消息
             window.addEventListener('message', event => {
                 const message = event.data;
@@ -265,44 +265,49 @@
                     currentSelectedItem.classList.remove('selected');
                     currentSelectedItem = null;
                 }
-                
+
                 const summaryTextEl = document.getElementById('summary-text');
                 const resultsEl = document.getElementById('results');
-                
+
                 // 统计读写操作数量
                 const writeCount = results.filter(r => r.isWrite).length;
                 const readCount = results.length - writeCount;
-                
+
                 // 更新统计信息
                 summaryTextEl.textContent = `找到 ${results.length} 处匹配：${readCount} 处读操作，${writeCount} 处写操作`;
-                
+
                 // 按文件分组结果
                 const groupedResults = {};
                 results.forEach(result => {
                     if (!groupedResults[result.file]) {
                         groupedResults[result.file] = [];
                     }
-                    groupedResults[result.file].push(result);
+
+                    // 检查是否已经存在相同行的结果
+                    const existingLineResult = groupedResults[result.file].find(r => r.line === result.line);
+                    if (!existingLineResult) {
+                        groupedResults[result.file].push(result);
+                    }
                 });
 
                 // 生成分组后的 HTML
                 resultsEl.innerHTML = Object.entries(groupedResults).map(([file, fileResults]) => {
                     // 按行号升序排序
                     fileResults.sort((a, b) => a.line - b.line);
-                    
+
                     // 从第一个结果中获取文件名
                     const fileName = fileResults[0].fileName;
                     const resultItems = fileResults.map(result => {
                         const line = result.lineContent;
                         const highlightClass = result.isWrite ? 'highlight-write' : 'highlight-read';
-                        
+
                         // 创建带有高亮的行内容
                         const beforeMatch = line.substring(0, result.matchStart);
                         const match = line.substring(result.matchStart, result.matchEnd);
                         const afterMatch = line.substring(result.matchEnd);
-                        
+
                         const highlightedLine = `${beforeMatch}<span class="${highlightClass}">${match}</span>${afterMatch}`;
-                        
+
                         return `
                             <div class="result-item" data-file="${result.file}" data-line="${result.line}">
                                 <span class="line-content">${result.line + 1} ${highlightedLine}</span>
