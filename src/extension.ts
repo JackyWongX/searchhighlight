@@ -400,6 +400,50 @@ class SearchResultsProvider implements vscode.WebviewViewProvider {
                         });
                     }
                     break;
+                case 'addFileExtFilter':
+                    // 处理添加文件扩展名到过滤列表
+                    const extension = message.extension;
+                    if (extension) {
+                        const config = vscode.workspace.getConfiguration('searchhighlight');
+                        const excludeExts = config.get<string[]>('excludeFileExtensions') || [];
+
+                        // 检查是否已存在该扩展名
+                        if (!excludeExts.includes(extension)) {
+                            excludeExts.push(extension);
+                            await config.update('excludeFileExtensions', excludeExts, vscode.ConfigurationTarget.Global);
+                            vscode.window.showInformationMessage(`已将 ${extension} 文件类型添加到搜索忽略列表`);
+
+                            // 如果有当前搜索结果，则重新执行搜索以应用新设置
+                            if (this._currentSearchResults) {
+                                const results = await ripGrepSearch.search(this._currentSearchResults.searchText);
+                                this.showResults(results, this._currentSearchResults.searchText);
+                            }
+                        } else {
+                            vscode.window.showInformationMessage(`${extension} 文件类型已在搜索忽略列表中`);
+                        }
+                    }
+                    break;
+                case 'copyToClipboard':
+                    // 处理复制到剪贴板
+                    if (message.text) {
+                        await vscode.env.clipboard.writeText(message.text);
+                        vscode.window.showInformationMessage(`已复制到剪贴板: ${message.text}`);
+                    }
+                    break;
+                case 'openInExplorer':
+                    // 处理在资源管理器中打开文件
+                    if (message.filePath) {
+                        const filePath = message.filePath;
+                        const dirname = path.dirname(filePath);
+                        try {
+                            // 使用 VS Code 内部命令在资源管理器中打开文件
+                            await vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(filePath));
+                        } catch (error) {
+                            console.error('在资源管理器中打开文件失败:', error);
+                            vscode.window.showErrorMessage('无法在资源管理器中打开文件');
+                        }
+                    }
+                    break;
             }
         });
     }

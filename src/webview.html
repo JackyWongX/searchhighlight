@@ -139,9 +139,29 @@
         }
         .control-button.active {
             background: var(--vscode-button-background);
-        }
-        .control-button:hover {
+        }        .control-button:hover {
             background: var(--vscode-button-background);
+        }
+
+        /* 右键菜单样式 */
+        .context-menu {
+            position: absolute;
+            background-color: var(--vscode-menu-background);
+            border: 1px solid var(--vscode-menu-border);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+            padding: 4px 0;
+            z-index: 1000;
+            border-radius: 3px;
+        }
+        .context-menu-item {
+            padding: 6px 12px;
+            cursor: pointer;
+            white-space: nowrap;
+            color: var(--vscode-menu-foreground);
+            font-size: 13px;
+        }
+        .context-menu-item:hover {
+            background-color: var(--vscode-list-hoverBackground);
         }
     </style>
 </head>
@@ -156,11 +176,19 @@
                 <button class="control-button" id="wholeWordBtn" title="全词匹配">\\b</button>
             </div>
         </div>
-    </div>
-    <div id="results"></div>
-    <script>
+    </div>    <div id="results"></div>    <div id="context-menu" class="context-menu" style="display: none;">
+        <div class="context-menu-item" id="filter-file-ext">过滤文件类型</div>
+        <div class="context-menu-item" id="copy-file-name">复制文件名</div>
+        <div class="context-menu-item" id="copy-file-path">复制文件路径</div>
+        <div class="context-menu-item" id="open-in-explorer">在资源管理器中打开</div>
+    </div>    <script>
         (function() {
             const vscode = acquireVsCodeApi();
+            const path = {
+                basename: function(filePath) {
+                    return filePath.replace(/^.*[\\\/]/, '');
+                }
+            };
             let currentColors = {
                 read: 'rgba(64, 200, 64, 0.2)',
                 write: 'rgba(240, 64, 64, 0.2)'
@@ -201,8 +229,14 @@
                 } else {
                     wholeWordBtn.classList.remove('active');
                 }
-            }            // 处理点击事件
+            }            // 全局变量用于存储右键菜单点击的文件
+            let contextMenuTargetFile = null;
+
+            // 处理点击事件
             document.addEventListener('click', (e) => {
+                // 隐藏右键菜单
+                document.getElementById('context-menu').style.display = 'none';
+
                 const fileHeader = e.target.closest('.file-header');
                 if (fileHeader) {
                     // 处理文件组的折叠/展开
@@ -230,6 +264,73 @@
                         type: 'jump',
                         file: file,
                         line: parseInt(line, 10)
+                    });
+                }
+            });
+
+            // 处理右键菜单
+            document.addEventListener('contextmenu', (e) => {
+                // 检查是否右键点击了文件头部
+                const fileHeader = e.target.closest('.file-header');
+                if (fileHeader) {
+                    e.preventDefault(); // 阻止默认右键菜单
+
+                    // 从文件头部获取文件路径
+                    const filePath = fileHeader.querySelector('.file-path').textContent;
+                    // 提取文件路径，移除括号内的文件名
+                    const filePathWithBrackets = filePath.match(/\((.*?)\)$/);
+                    if (filePathWithBrackets && filePathWithBrackets[1]) {
+                        contextMenuTargetFile = filePathWithBrackets[1];
+
+                        // 显示右键菜单
+                        const menu = document.getElementById('context-menu');
+                        menu.style.display = 'block';
+                        menu.style.left = e.pageX + 'px';
+                        menu.style.top = e.pageY + 'px';
+                    }
+                }
+            });            // 处理菜单项点击
+            document.getElementById('filter-file-ext').addEventListener('click', () => {
+                if (contextMenuTargetFile) {
+                    // 获取文件扩展名
+                    const fileExt = contextMenuTargetFile.split('.').pop();
+                    if (fileExt) {
+                        // 发送消息到扩展以添加到过滤列表
+                        vscode.postMessage({
+                            type: 'addFileExtFilter',
+                            extension: '.' + fileExt
+                        });
+                    }
+                }
+            });
+
+            // 复制文件名
+            document.getElementById('copy-file-name').addEventListener('click', () => {
+                if (contextMenuTargetFile) {
+                    const fileName = path.basename(contextMenuTargetFile);
+                    vscode.postMessage({
+                        type: 'copyToClipboard',
+                        text: fileName
+                    });
+                }
+            });
+
+            // 复制文件路径
+            document.getElementById('copy-file-path').addEventListener('click', () => {
+                if (contextMenuTargetFile) {
+                    vscode.postMessage({
+                        type: 'copyToClipboard',
+                        text: contextMenuTargetFile
+                    });
+                }
+            });
+
+            // 在资源管理器中打开
+            document.getElementById('open-in-explorer').addEventListener('click', () => {
+                if (contextMenuTargetFile) {
+                    vscode.postMessage({
+                        type: 'openInExplorer',
+                        filePath: contextMenuTargetFile
                     });
                 }
             });
