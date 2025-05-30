@@ -4,13 +4,36 @@
     <meta charset="UTF-8">
     <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Search Results</title>
-    <style>
+    <title>Search Results</title>    <style>
         body {
             padding: 10px;
             font-family: var(--vscode-font-family);
             font-size: var(--vscode-font-size);
             color: var(--vscode-foreground);
+        }        .search-container {
+            margin-bottom: 10px;
+            padding: 4px 0;
+        }
+        .search-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        #search-input {
+            flex: 1;
+            padding: 6px 8px;
+            border: 1px solid var(--vscode-input-border);
+            background-color: var(--vscode-input-background);
+            color: var(--vscode-input-foreground);
+            border-radius: 2px;
+            outline: none;
+        }
+        #search-input:focus {
+            border-color: var(--vscode-focusBorder);
+        }
+        .search-container .controls {
+            display: flex;
+            gap: 4px;
         }
         .file-group {
             margin-bottom: 1px;
@@ -122,12 +145,16 @@
         }
     </style>
 </head>
-<body>
-    <div class="summary" id="summary">
+<body>    <div class="summary" id="summary">
         <div id="summary-text"></div>
-        <div class="controls">
-            <button class="control-button" id="caseSensitiveBtn" title="区分大小写">Aa</button>
-            <button class="control-button" id="wholeWordBtn" title="全词匹配">\\b</button>
+    </div>
+    <div class="search-container" id="search-container">
+        <div class="search-row">
+            <input type="text" id="search-input" placeholder="输入搜索内容..." />
+            <div class="controls">
+                <button class="control-button" id="caseSensitiveBtn" title="区分大小写">Aa</button>
+                <button class="control-button" id="wholeWordBtn" title="全词匹配">\\b</button>
+            </div>
         </div>
     </div>
     <div id="results"></div>
@@ -174,9 +201,7 @@
                 } else {
                     wholeWordBtn.classList.remove('active');
                 }
-            }
-
-            // 处理点击事件
+            }            // 处理点击事件
             document.addEventListener('click', (e) => {
                 const fileHeader = e.target.closest('.file-header');
                 if (fileHeader) {
@@ -209,6 +234,19 @@
                 }
             });
 
+            // 处理搜索输入框事件
+            document.getElementById('search-input').addEventListener('keyup', (e) => {
+                if (e.key === 'Enter') {
+                    const searchText = e.target.value.trim();
+                    if (searchText) {
+                        vscode.postMessage({
+                            type: 'search',
+                            text: searchText
+                        });
+                    }
+                }
+            });
+
             // 处理按钮点击事件
             document.getElementById('caseSensitiveBtn').addEventListener('click', () => {
                 const newValue = !searchOptions.caseSensitive;
@@ -236,8 +274,7 @@
 
             // 处理来自扩展的消息
             window.addEventListener('message', event => {
-                const message = event.data;
-                switch (message.type) {
+                const message = event.data;                switch (message.type) {
                     case 'results':
                         if (message.colors) {
                             currentColors = message.colors;
@@ -247,11 +284,17 @@
                             searchOptions = message.searchOptions;
                             updateButtonStates();
                         }
+                        if (message.searchText) {
+                            document.getElementById('search-input').value = message.searchText;
+                        }
                         updateResults(message.results, message.searchText);
                         break;
                     case 'updateSearchOptions':
                         searchOptions = message.searchOptions;
                         updateButtonStates();
+                        break;
+                    case 'focusSearch':
+                        document.getElementById('search-input').focus();
                         break;
                 }
             });

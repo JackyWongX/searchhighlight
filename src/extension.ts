@@ -41,7 +41,7 @@ class WriteOperationDetector {
         this.patterns = this.loadPatternsFromConfig();
         this.patternCache.clear();
     }
-    
+
     public isWriteOperation(lineText: string): boolean {
         const patterns = this.patterns.common;
         const checkText = lineText.trim();
@@ -51,20 +51,20 @@ class WriteOperationDetector {
 
         // 如果以.开头，检查是否是写操作方法
         if (checkText.startsWith('.')) {
-            return patterns.methods.some(method => 
+            return patterns.methods.some(method =>
                 checkText.startsWith('.' + method));
         }
 
         // 如果以->开头，检查是否是写操作方法（C++指针操作）
         if (checkText.startsWith('->')) {
-            return patterns.methods.some(method => 
+            return patterns.methods.some(method =>
                 checkText.startsWith('->' + method));
         }
 
         // 检查第一个非空白字符是否是操作符
         if (patterns.operators.includes(checkText[0])) {
             // 排除比较操作符
-            return !patterns.excludeOperators?.some(op => 
+            return !patterns.excludeOperators?.some(op =>
                 checkText.startsWith(op));
         }
 
@@ -82,10 +82,10 @@ class RipGrepSearch {
 
     constructor() {
         // 使用 VS Code 内置的 ripgrep
-        const vscodePath = process.env.VSCODE_CWD || process.env.VSCODE_NLS_CONFIG 
+        const vscodePath = process.env.VSCODE_CWD || process.env.VSCODE_NLS_CONFIG
             ? path.dirname(process.execPath)
             : 'C:\\Program Files\\Microsoft VS Code';
-            
+
         this.rgPath = path.join(vscodePath, 'resources', 'app', 'node_modules', '@vscode', 'ripgrep', 'bin', 'rg.exe');
 
         // 如果找不到 VS Code 内置的 ripgrep，尝试使用系统中的 rg
@@ -99,7 +99,7 @@ class RipGrepSearch {
     public async search(searchText: string): Promise<SearchResult[]> {
         const results: SearchResult[] = [];
         const workspaceFolders = vscode.workspace.workspaceFolders;
-        
+
         if (!workspaceFolders || !searchText.trim()) {
             return results;
         }
@@ -143,7 +143,7 @@ class RipGrepSearch {
                 ];
 
                 console.log(`执行命令: ${this.rgPath} ${rgArgs.join(' ')}`);
-                
+
                 const rg = cp.spawn(this.rgPath, rgArgs, {
                     stdio: ['pipe', 'pipe', 'pipe'],
                     windowsHide: true,
@@ -153,7 +153,7 @@ class RipGrepSearch {
                         LC_ALL: 'zh_CN.UTF-8'
                     }
                 });
-                
+
                 let output = '';
                 let errorOutput = '';
 
@@ -161,7 +161,7 @@ class RipGrepSearch {
                     // 检测编码
                     const detected = jschardet.detect(data);
                     const encoding = detected.encoding || 'utf8';
-                    
+
                     // 使用检测到的编码解码内容
                     if (encoding.toLowerCase() === 'utf-8' || encoding.toLowerCase() === 'ascii') {
                         output += data.toString('utf8');
@@ -178,7 +178,7 @@ class RipGrepSearch {
                 rg.stderr.on('data', (data: Buffer) => {
                     const detected = jschardet.detect(data);
                     const encoding = detected.encoding || 'utf8';
-                    
+
                     if (encoding.toLowerCase() === 'utf-8' || encoding.toLowerCase() === 'ascii') {
                         errorOutput += data.toString('utf8');
                     } else {
@@ -200,7 +200,7 @@ class RipGrepSearch {
                     if (errorOutput) {
                         console.error(`ripgrep 错误输出: ${errorOutput}`);
                     }
-                    
+
                     // code 1 表示没有找到匹配项，这是正常的
                     if (code !== 0 && code !== 1) {
                         console.error(`ripgrep 进程退出代码 ${code}`);
@@ -377,6 +377,29 @@ class SearchResultsProvider implements vscode.WebviewViewProvider {
                         this.showResults(results, this._currentSearchResults.searchText);
                     }
                     break;
+                case 'search':
+                    // 处理来自输入框的搜索请求
+                    const searchText = message.text;
+                    if (searchText) {
+                        this._searchText = searchText;
+                        // 显示进度提示
+                        await vscode.window.withProgress({
+                            location: vscode.ProgressLocation.Notification,
+                            title: `搜索 "${searchText}"`,
+                            cancellable: true
+                        }, async (progress) => {
+                            try {
+                                // 使用 ripgrep 执行搜索
+                                const results = await ripGrepSearch.search(searchText);
+                                // 更新搜索结果视图
+                                this.showResults(results, searchText);
+                            } catch (error) {
+                                console.error('搜索过程中发生错误:', error);
+                                vscode.window.showErrorMessage('搜索过程中发生错误');
+                            }
+                        });
+                    }
+                    break;
             }
         });
     }
@@ -400,15 +423,27 @@ class SearchResultsProvider implements vscode.WebviewViewProvider {
 
             this._currentSearchResults = { results: sortedResults, searchText };
             this._view.show(true);
-            this._view.webview.postMessage({ 
-                type: 'results', 
+            this._view.webview.postMessage({
+                type: 'results',
                 results: sortedResults,
-                searchText,
+                searchText, // 将搜索文本传递给 webview 用于显示在输入框
                 colors: {
                     read: readColor,
                     write: writeColor
                 },
                 searchOptions: this._getSearchOptions()
+            });
+        }
+    }
+
+    // 添加方法来聚焦输入框
+    public focusSearchInput() {
+        if (this._view) {
+            // 先确保视图显示
+            this._view.show(true);
+            // 发送消息让 webview 聚焦到输入框
+            this._view.webview.postMessage({
+                type: 'focusSearch'
             });
         }
     }
@@ -428,33 +463,33 @@ class SearchResultsProvider implements vscode.WebviewViewProvider {
     private highlightSearchText(editor: vscode.TextEditor, searchText: string, currentLine: number) {
         // 清除之前的高亮
         this.clearDecorations();
-        
+
         // 获取配置
         const config = vscode.workspace.getConfiguration('searchhighlight');
         const readColor = config.get<string>('colors.read', '#FFEB3B');
         const writeColor = config.get<string>('colors.write', '#FF5252');
         const { caseSensitive, matchWholeWord } = this._getSearchOptions();
-        
+
         // 创建读写操作的高亮样式
         const readDecorationType = vscode.window.createTextEditorDecorationType({
             backgroundColor: readColor,
         });
-        
+
         const writeDecorationType = vscode.window.createTextEditorDecorationType({
             backgroundColor: writeColor,
         });
-        
+
         this._currentDecorationTypes.push(readDecorationType, writeDecorationType);
-        
+
         // 构建搜索正则表达式
         const flags = caseSensitive ? 'g' : 'gi';
         const wordBoundary = matchWholeWord ? '\\b' : '';
         const searchRegex = new RegExp(`${wordBoundary}${this.escapeRegExp(searchText)}${wordBoundary}`, flags);
-        
+
         // 遍历文档中的每一行
         const readDecorations: vscode.DecorationOptions[] = [];
         const writeDecorations: vscode.DecorationOptions[] = [];
-        
+
         for (let i = 0; i < editor.document.lineCount; i++) {
             const line = editor.document.lineAt(i);
             let match;
@@ -462,11 +497,11 @@ class SearchResultsProvider implements vscode.WebviewViewProvider {
                 const startPos = new vscode.Position(i, match.index);
                 const endPos = new vscode.Position(i, match.index + match[0].length);
                 const range = new vscode.Range(startPos, endPos);
-                
+
                 // 判断是否为写操作
                 const afterText = line.text.substring(match.index + match[0].length).trim();
                 const isWrite = writeDetector.isWriteOperation(afterText);
-                
+
                 const decoration = { range };
                 if (isWrite) {
                     writeDecorations.push(decoration);
@@ -475,7 +510,7 @@ class SearchResultsProvider implements vscode.WebviewViewProvider {
                 }
             }
         }
-        
+
         // 应用高亮
         if (readDecorations.length > 0 || writeDecorations.length > 0) {
             editor.setDecorations(readDecorationType, readDecorations);
@@ -483,10 +518,10 @@ class SearchResultsProvider implements vscode.WebviewViewProvider {
             // 设置上下文变量，标记有高亮存在
             vscode.commands.executeCommand('setContext', 'searchHighlightActive', true);
         }
-        
+
         // 注册事件监听器清除高亮
         const disposables: vscode.Disposable[] = [];
-        
+
         // 文档切换监听
         disposables.push(
             vscode.window.onDidChangeActiveTextEditor(() => {
@@ -517,7 +552,7 @@ class SearchResultsProvider implements vscode.WebviewViewProvider {
 
 export function activate(context: vscode.ExtensionContext) {
     console.log('SearchHighlight 插件开始激活...');
-    
+
     try {
         console.log('正在创建 SearchResultsProvider...');
         const searchResultsProvider = new SearchResultsProvider(context.extensionUri);
@@ -589,12 +624,19 @@ export function activate(context: vscode.ExtensionContext) {
             const editor = vscode.window.activeTextEditor;
             if (!editor) {
                 console.log('没有活动的编辑器');
+                // 打开搜索面板并聚焦到输入框
+                await ensureViewIsVisible();
+                // 获取视图提供程序实例
+                const provider = SearchResultsView.createOrShow(context);
+                if (provider instanceof SearchResultsProvider) {
+                    provider.focusSearchInput();
+                }
                 return;
             }
 
             const selection = editor.selection;
             let searchText = editor.document.getText(selection);
-            
+
             // 如果没有选中文本，则获取光标所在位置的单词
             if (!searchText) {
                 console.log('没有选中文本，尝试获取光标所在单词...');
@@ -605,15 +647,21 @@ export function activate(context: vscode.ExtensionContext) {
                     console.log('获取到光标所在单词:', searchText);
                 }
             }
-            
+
             if (!searchText) {
                 console.log('没有找到可搜索的文本');
-                vscode.window.showInformationMessage('请选择或将光标置于要搜索的文本上');
+                // 打开搜索面板并聚焦到输入框，不再显示错误消息
+                await ensureViewIsVisible();
+                // 获取视图提供程序实例
+                const provider = SearchResultsView.createOrShow(context);
+                if (provider instanceof SearchResultsProvider) {
+                    provider.focusSearchInput();
+                }
                 return;
             }
-            
+
             console.log('搜索文本:', searchText);
-            
+
             try {
                 // 确保搜索结果视图是可见的
                 console.log('正在显示搜索结果视图...');
@@ -630,7 +678,7 @@ export function activate(context: vscode.ExtensionContext) {
                         // 使用 ripgrep 执行搜索
                         const results = await ripGrepSearch.search(searchText);
                         console.log(`搜索完成，找到 ${results.length} 个结果`);
-                        
+
                         // 更新搜索结果视图
                         searchResultsProvider.showResults(results, searchText);
 
