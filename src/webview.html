@@ -405,6 +405,7 @@
 
             // 更新搜索结果显示
             function updateResults(results, searchText) {
+                console.log('updateResults called with results:', results);
                 if (currentSelectedItem) {
                     currentSelectedItem.classList.remove('selected');
                     currentSelectedItem = null;
@@ -433,6 +434,8 @@
                         groupedResults[result.file].push(result);
                     }
                 });
+
+                console.log('groupedResults:', groupedResults);
 
                 // 生成分组后的 HTML
                 resultsEl.innerHTML = Object.entries(groupedResults).map(([file, fileResults]) => {

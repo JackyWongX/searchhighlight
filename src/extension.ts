@@ -81,22 +81,186 @@ class RipGrepSearch {
     private rgPath: string;
 
     constructor() {
-        // 使用 VS Code 内置的 ripgrep
-        const vscodePath = process.env.VSCODE_CWD || process.env.VSCODE_NLS_CONFIG
-            ? path.dirname(process.execPath)
-            : 'C:\\Program Files\\Microsoft VS Code';
+        // 尝试找到 VS Code 内置的 ripgrep
+        let rgPath = 'rg'; // 默认使用系统中的 rg
 
-        this.rgPath = path.join(vscodePath, 'resources', 'app', 'node_modules', '@vscode', 'ripgrep', 'bin', 'rg.exe');
+        const vscodePaths = [
+            'C:\\Program Files\\Microsoft VS Code',
+            'C:\\Program Files (x86)\\Microsoft VS Code',
+            path.join(process.env.USERPROFILE || '', 'AppData\\Local\\Programs\\Microsoft VS Code'),
+            path.join(process.env.USERPROFILE || '', 'AppData\\Local\\Programs\\Microsoft VS Code Insiders'),
+            // 也可以尝试从环境变量获取
+            process.env.VSCODE_CWD ? path.dirname(process.env.VSCODE_CWD) : undefined,
+            process.env.VSCODE_NLS_CONFIG ? path.dirname(path.dirname(process.env.VSCODE_NLS_CONFIG)) : undefined,
+        ].filter(Boolean);
 
-        // 如果找不到 VS Code 内置的 ripgrep，尝试使用系统中的 rg
-        if (!fs.existsSync(this.rgPath)) {
-            console.warn('未找到 VS Code 内置的 ripgrep，将尝试使用系统中的 rg');
-            this.rgPath = 'rg';
+        for (const vscodePath of vscodePaths) {
+            if (!vscodePath) {
+                continue;
+            }
+            const candidate = path.join(vscodePath, 'resources', 'app', 'node_modules', '@vscode', 'ripgrep', 'bin', 'rg.exe');
+            if (fs.existsSync(candidate)) {
+                rgPath = candidate;
+                break;
+            }
         }
+
+        this.rgPath = rgPath;
         console.log(`RipGrep 路径: ${this.rgPath}`);
     }
 
-    public async search(searchText: string): Promise<SearchResult[]> {
+    private async executeRipGrep(rgArgs: string[], caseSensitive: boolean, matchWholeWord: boolean, searchText: string): Promise<SearchResult[]> {
+        return new Promise<SearchResult[]>((resolve, reject) => {
+            console.log(`执行命令: ${this.rgPath} ${rgArgs.join(' ')}`);
+
+            const rg = cp.spawn(this.rgPath, rgArgs, {
+                stdio: ['pipe', 'pipe', 'pipe'],
+                windowsHide: true,
+                env: {
+                    ...process.env,
+                    LANG: 'zh_CN.UTF-8',
+                    LC_ALL: 'zh_CN.UTF-8'
+                }
+            });
+
+            let output = '';
+            let errorOutput = '';
+
+            rg.stdout.on('data', (data: Buffer) => {
+                // 检测编码
+                const detected = jschardet.detect(data);
+                const encoding = detected.encoding || 'utf8';
+
+                // 使用检测到的编码解码内容
+                if (encoding.toLowerCase() === 'utf-8' || encoding.toLowerCase() === 'ascii') {
+                    output += data.toString('utf8');
+                } else {
+                    try {
+                        output += iconv.decode(data, encoding);
+                    } catch (e) {
+                        console.error(`解码错误(${encoding}):`, e);
+                        output += data.toString('utf8'); // 降级到 UTF-8
+                    }
+                }
+            });
+
+            rg.stderr.on('data', (data: Buffer) => {
+                const detected = jschardet.detect(data);
+                const encoding = detected.encoding || 'utf8';
+
+                if (encoding.toLowerCase() === 'utf-8' || encoding.toLowerCase() === 'ascii') {
+                    errorOutput += data.toString('utf8');
+                } else {
+                    try {
+                        errorOutput += iconv.decode(data, encoding);
+                    } catch (e) {
+                        console.error(`解码错误(${encoding}):`, e);
+                        errorOutput += data.toString('utf8');
+                    }
+                }
+            });
+
+            rg.on('error', (err) => {
+                console.error(`ripgrep 执行错误: ${err.message}`);
+                reject(err);
+            });
+
+            rg.on('close', (code: number) => {
+                if (errorOutput) {
+                    console.error(`ripgrep 错误输出: ${errorOutput}`);
+                }
+
+                // code 1 表示没有找到匹配项，这是正常的
+                if (code !== 0 && code !== 1) {
+                    console.error(`ripgrep 进程退出代码 ${code}`);
+                    resolve([]);
+                    return;
+                }
+
+                //console.log(`搜索结果 : ${output}`);
+                const fileResults: SearchResult[] = [];
+                const lines = output.split('\n');
+
+                for (const line of lines) {
+                    if (!line.trim()) {
+                        continue;
+                    }
+
+                    //console.log(`处理行: ${line} (${line.length} 字符)`);
+                    // 1. 查找第一个点(.)的位置
+                    const lastDotPos = line.indexOf('.');
+                    if (lastDotPos === -1) {
+                        console.warn('无效格式(缺少文件扩展名):', line);
+                        continue;
+                    }
+                    //console.warn(`.的位置: ${lastDotPos} 后面的字符: ${line.substring(lastDotPos)}`);
+
+                    // 2. 从点位置开始查找第一个冒号(:)
+                    const firstColonAfterDot = line.indexOf(':', lastDotPos);
+                    if (firstColonAfterDot === -1) {
+                        console.warn('无效格式(文件名后缺少冒号):', line);
+                        continue;
+                    }
+                    //console.warn(`:的位置: ${firstColonAfterDot} 后面的字符: ${line.substring(firstColonAfterDot)}`);
+
+                    // 3. 查找下一个冒号(分隔行号和内容)
+                    const secondColonAfterDot = line.indexOf(':', firstColonAfterDot + 1);
+                    if (secondColonAfterDot === -1) {
+                        console.warn('无效格式(行号后缺少冒号):', line);
+                        continue;
+                    }
+                    //console.warn(`:的位置: ${secondColonAfterDot} 后面的字符: ${line.substring(secondColonAfterDot)}`);
+
+                    // 提取各部分
+                    const filePath = line.substring(0, firstColonAfterDot);
+                    const lineNum = line.substring(firstColonAfterDot + 1, secondColonAfterDot);
+                    const content = line.substring(secondColonAfterDot + 1).trim();
+                    // 若content是注释的则跳过
+                    if (content.startsWith('//') || content.startsWith('#')) {
+                        continue;
+                    }
+
+                    // 构建搜索正则表达式，应用和highlightSearchText相同的逻辑
+                    const flags = caseSensitive ? 'g' : 'gi';
+                    const wordBoundary = matchWholeWord ? '\\b' : '';
+                    const escapedSearchText = searchText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                    const searchRegex = new RegExp(`${wordBoundary}${escapedSearchText}${wordBoundary}`, flags);
+
+                    let match;
+                    let matches = [];
+                    while ((match = searchRegex.exec(content)) !== null) {
+                        // 对每个匹配项判断其后面的文本是否为写操作
+                        const afterText = content.substring(match.index + match[0].length).trim();
+                        const isWrite = writeDetector.isWriteOperation(afterText);
+                        matches.push({
+                            start: match.index,
+                            end: match.index + match[0].length,
+                            isWrite: isWrite
+                        });
+                    }
+
+                    // 如果找到匹配项，将每个匹配项以及其写操作状态加入到结果中
+                    if (matches.length > 0) {
+                        matches.forEach(match => {
+                            fileResults.push({
+                                file: filePath,
+                                fileName: path.basename(filePath),
+                                line: parseInt(lineNum) - 1,
+                                lineContent: content,
+                                isWrite: match.isWrite,
+                                matchStart: match.start,    // 添加匹配位置信息
+                                matchEnd: match.end
+                            });
+                        });
+                    }
+                }
+
+                resolve(fileResults);
+            });
+        });
+    }
+
+    public async search(searchText: string, startFilePath?: string, onResults?: (results: SearchResult[]) => void, progress?: { report: (msg: { message: string }) => void }, token?: vscode.CancellationToken): Promise<SearchResult[]> {
         const results: SearchResult[] = [];
         const workspaceFolders = vscode.workspace.workspaceFolders;
 
@@ -124,179 +288,94 @@ class RipGrepSearch {
             ])
         ];
 
-        const searchPromises = workspaceFolders.map(folder => {
-            return new Promise<SearchResult[]>((resolve, reject) => {
+        if (startFilePath) {
+            // 分层搜索
+            const workspaceFolder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(startFilePath));
+            if (!workspaceFolder) {
+                return [];
+            }
+
+            const startDir = path.dirname(startFilePath);
+            const dirs: string[] = [];
+            let current = startDir;
+            const root = workspaceFolder.uri.fsPath;
+
+            // 收集从当前目录到根目录的所有目录
+            while (true) {
+                dirs.push(current);
+                const parent = path.dirname(current);
+                if (parent === current) {
+                    break; // 到达根目录
+                }
+                current = parent;
+                // 如果到达工作空间根目录，停止
+                if (path.relative(root, current) === '' || current === root) {
+                    break;
+                }
+            }
+
+            const allResults: SearchResult[] = [];
+            for (const dir of dirs) {
+                if (token?.isCancellationRequested) {
+                    break;
+                }
+
+                progress?.report({ message: `搜索目录: ${path.relative(root, dir)}` });
+
                 const rgArgs = [
-                    '--line-number',     // 显示行号
-                    '--no-heading',      // 不显示文件头
-                    '--color=never',     // 不使用颜色
-                    '--hidden',          // 搜索隐藏文件
-                    '--no-ignore',       // 不使用 ignore 文件
-                    '--max-columns=1000', // 限制每行最大长度
-                    '--fixed-strings',   // 按字面字符串搜索
-                    ...(matchWholeWord ? ['--word-regexp'] : []), // 全词匹配
-                    ...(caseSensitive ? [] : ['-i']), // 不区分大小写
-                    ...excludeArgs,      // 排除目录和文件后缀
-                    '--',                // 分隔符
-                    searchText,          // 搜索模式
-                    folder.uri.fsPath    // 搜索路径
+                    '--line-number',
+                    '--no-heading',
+                    '--color=never',
+                    '--hidden',
+                    '--no-ignore',
+                    '--max-columns=1000',
+                    '--fixed-strings',
+                    ...(matchWholeWord ? ['--word-regexp'] : []),
+                    ...(caseSensitive ? [] : ['-i']),
+                    ...excludeArgs,
+                    '--',
+                    searchText,
+                    dir
                 ];
 
-                console.log(`执行命令: ${this.rgPath} ${rgArgs.join(' ')}`);
+                const fileResults = await this.executeRipGrep(rgArgs, caseSensitive, matchWholeWord, searchText);
+                allResults.push(...fileResults);
+                if (onResults) {
+                    onResults([...allResults]);
+                }
+            }
+            return allResults;
+        } else {
+            // 原始搜索逻辑
+            const searchPromises = workspaceFolders.map(folder => {
+                return new Promise<SearchResult[]>((resolve, reject) => {
+                    const rgArgs = [
+                        '--line-number',
+                        '--no-heading',
+                        '--color=never',
+                        '--hidden',
+                        '--no-ignore',
+                        '--max-columns=1000',
+                        '--fixed-strings',
+                        ...(matchWholeWord ? ['--word-regexp'] : []),
+                        ...(caseSensitive ? [] : ['-i']),
+                        ...excludeArgs,
+                        '--',
+                        searchText,
+                        folder.uri.fsPath
+                    ];
 
-                const rg = cp.spawn(this.rgPath, rgArgs, {
-                    stdio: ['pipe', 'pipe', 'pipe'],
-                    windowsHide: true,
-                    env: {
-                        ...process.env,
-                        LANG: 'zh_CN.UTF-8',
-                        LC_ALL: 'zh_CN.UTF-8'
-                    }
-                });
-
-                let output = '';
-                let errorOutput = '';
-
-                rg.stdout.on('data', (data: Buffer) => {
-                    // 检测编码
-                    const detected = jschardet.detect(data);
-                    const encoding = detected.encoding || 'utf8';
-
-                    // 使用检测到的编码解码内容
-                    if (encoding.toLowerCase() === 'utf-8' || encoding.toLowerCase() === 'ascii') {
-                        output += data.toString('utf8');
-                    } else {
-                        try {
-                            output += iconv.decode(data, encoding);
-                        } catch (e) {
-                            console.error(`解码错误(${encoding}):`, e);
-                            output += data.toString('utf8'); // 降级到 UTF-8
-                        }
-                    }
-                });
-
-                rg.stderr.on('data', (data: Buffer) => {
-                    const detected = jschardet.detect(data);
-                    const encoding = detected.encoding || 'utf8';
-
-                    if (encoding.toLowerCase() === 'utf-8' || encoding.toLowerCase() === 'ascii') {
-                        errorOutput += data.toString('utf8');
-                    } else {
-                        try {
-                            errorOutput += iconv.decode(data, encoding);
-                        } catch (e) {
-                            console.error(`解码错误(${encoding}):`, e);
-                            errorOutput += data.toString('utf8');
-                        }
-                    }
-                });
-
-                rg.on('error', (err) => {
-                    console.error(`ripgrep 执行错误: ${err.message}`);
-                    reject(err);
-                });
-
-                rg.on('close', (code: number) => {
-                    if (errorOutput) {
-                        console.error(`ripgrep 错误输出: ${errorOutput}`);
-                    }
-
-                    // code 1 表示没有找到匹配项，这是正常的
-                    if (code !== 0 && code !== 1) {
-                        console.error(`ripgrep 进程退出代码 ${code}`);
-                        resolve([]);
-                        return;
-                    }
-
-                    //console.log(`搜索结果 : ${output}`);
-                    const fileResults: SearchResult[] = [];
-                    const lines = output.split('\n');
-
-                    for (const line of lines) {
-                        if (!line.trim()) {
-                            continue;
-                        }
-
-                        //console.log(`处理行: ${line} (${line.length} 字符)`);
-                        // 1. 查找第一个点(.)的位置
-                        const lastDotPos = line.indexOf('.');
-                        if (lastDotPos === -1) {
-                            console.warn('无效格式(缺少文件扩展名):', line);
-                            continue;
-                        }
-                        //console.warn(`.的位置: ${lastDotPos} 后面的字符: ${line.substring(lastDotPos)}`);
-
-                        // 2. 从点位置开始查找第一个冒号(:)
-                        const firstColonAfterDot = line.indexOf(':', lastDotPos);
-                        if (firstColonAfterDot === -1) {
-                            console.warn('无效格式(文件名后缺少冒号):', line);
-                            continue;
-                        }
-                        //console.warn(`:的位置: ${firstColonAfterDot} 后面的字符: ${line.substring(firstColonAfterDot)}`);
-
-                        // 3. 查找下一个冒号(分隔行号和内容)
-                        const secondColonAfterDot = line.indexOf(':', firstColonAfterDot + 1);
-                        if (secondColonAfterDot === -1) {
-                            console.warn('无效格式(行号后缺少冒号):', line);
-                            continue;
-                        }
-                        //console.warn(`:的位置: ${secondColonAfterDot} 后面的字符: ${line.substring(secondColonAfterDot)}`);
-
-                        // 提取各部分
-                        const filePath = line.substring(0, firstColonAfterDot);
-                        const lineNum = line.substring(firstColonAfterDot + 1, secondColonAfterDot);
-                        const content = line.substring(secondColonAfterDot + 1).trim();
-                        // 若content是注释的则跳过
-                        if (content.startsWith('//') || content.startsWith('#')) {
-                            continue;
-                        }
-
-                        // 构建搜索正则表达式，应用和highlightSearchText相同的逻辑
-                        const flags = caseSensitive ? 'g' : 'gi';
-                        const wordBoundary = matchWholeWord ? '\\b' : '';
-                        const escapedSearchText = searchText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                        const searchRegex = new RegExp(`${wordBoundary}${escapedSearchText}${wordBoundary}`, flags);
-
-                        let match;
-                        let matches = [];
-                        while ((match = searchRegex.exec(content)) !== null) {
-                            // 对每个匹配项判断其后面的文本是否为写操作
-                            const afterText = content.substring(match.index + match[0].length).trim();
-                            const isWrite = writeDetector.isWriteOperation(afterText);
-                            matches.push({
-                                start: match.index,
-                                end: match.index + match[0].length,
-                                isWrite: isWrite
-                            });
-                        }
-
-                        // 如果找到匹配项，将每个匹配项以及其写操作状态加入到结果中
-                        if (matches.length > 0) {
-                            matches.forEach(match => {
-                                fileResults.push({
-                                    file: filePath,
-                                    fileName: path.basename(filePath),
-                                    line: parseInt(lineNum) - 1,
-                                    lineContent: content,
-                                    isWrite: match.isWrite,
-                                    matchStart: match.start,    // 添加匹配位置信息
-                                    matchEnd: match.end
-                                });
-                            });
-                        }
-                    }
-
-                    resolve(fileResults);
+                    this.executeRipGrep(rgArgs, caseSensitive, matchWholeWord, searchText).then(resolve).catch(reject);
                 });
             });
-        });
 
-        try {
-            const allResults = await Promise.all(searchPromises);
-            return allResults.flat();
-        } catch (error) {
-            console.error('搜索过程中出错:', error);
-            return [];
+            try {
+                const allResults = await Promise.all(searchPromises);
+                return allResults.flat();
+            } catch (error) {
+                console.error('搜索过程中出错:', error);
+                return [];
+            }
         }
     }
 }
@@ -373,7 +452,7 @@ class SearchResultsProvider implements vscode.WebviewViewProvider {
                     await config.update(message.option, message.value, vscode.ConfigurationTarget.Global);
                     if (this._currentSearchResults) {
                         // 重新执行搜索以应用新设置
-                        const results = await ripGrepSearch.search(this._currentSearchResults.searchText);
+                        const results = await ripGrepSearch.search(this._currentSearchResults.searchText, undefined);
                         this.showResults(results, this._currentSearchResults.searchText);
                     }
                     break;
@@ -387,10 +466,13 @@ class SearchResultsProvider implements vscode.WebviewViewProvider {
                             location: vscode.ProgressLocation.Notification,
                             title: `搜索 "${searchText}"`,
                             cancellable: true
-                        }, async (progress) => {
+                        }, async (progress, token) => {
                             try {
+                                const currentFile = vscode.window.activeTextEditor?.document.uri.fsPath;
                                 // 使用 ripgrep 执行搜索
-                                const results = await ripGrepSearch.search(searchText);
+                                const results = await ripGrepSearch.search(searchText, currentFile, (partialResults) => {
+                                    this.showResults(partialResults, searchText);
+                                }, progress, token);
                                 // 更新搜索结果视图
                                 this.showResults(results, searchText);
                             } catch (error) {
@@ -415,7 +497,7 @@ class SearchResultsProvider implements vscode.WebviewViewProvider {
 
                             // 如果有当前搜索结果，则重新执行搜索以应用新设置
                             if (this._currentSearchResults) {
-                                const results = await ripGrepSearch.search(this._currentSearchResults.searchText);
+                                const results = await ripGrepSearch.search(this._currentSearchResults.searchText, undefined);
                                 this.showResults(results, this._currentSearchResults.searchText);
                             }
                         } else {
@@ -716,11 +798,13 @@ export function activate(context: vscode.ExtensionContext) {
                     location: vscode.ProgressLocation.Notification,
                     title: `搜索 "${searchText}"`,
                     cancellable: true
-                }, async (progress) => {
+                }, async (progress, token) => {
                     try {
                         console.log('开始执行搜索...');
                         // 使用 ripgrep 执行搜索
-                        const results = await ripGrepSearch.search(searchText);
+                        const results = await ripGrepSearch.search(searchText, editor.document.uri.fsPath, (partialResults) => {
+                            searchResultsProvider.showResults(partialResults, searchText);
+                        }, progress, token);
                         console.log(`搜索完成，找到 ${results.length} 个结果`);
 
                         // 更新搜索结果视图
