@@ -48,6 +48,15 @@
             align-items: center;
             color: var(--vscode-sideBarTitle-foreground);
         }
+        .file-path {
+            color: orange;
+        }
+        .file-name {
+            color: orange;
+        }
+        .file-path {
+            color: var(--vscode-editor-foreground);
+        }
         .file-header:hover {
             background-color: var(--vscode-list-hoverBackground);
         }
@@ -177,6 +186,7 @@
             </div>
         </div>
     </div>    <div id="results"></div>    <div id="context-menu" class="context-menu" style="display: none;">
+        <div class="context-menu-item" id="collapse-all">折叠全部</div>
         <div class="context-menu-item" id="filter-file-ext">过滤文件类型</div>
         <div class="context-menu-item" id="copy-file-name">复制文件名</div>
         <div class="context-menu-item" id="copy-file-path">复制文件路径</div>
@@ -277,19 +287,30 @@
 
                     // 从文件头部获取文件路径
                     const filePath = fileHeader.querySelector('.file-path').textContent;
-                    // 提取文件路径，移除括号内的文件名
-                    const filePathWithBrackets = filePath.match(/\((.*?)\)$/);
-                    if (filePathWithBrackets && filePathWithBrackets[1]) {
-                        contextMenuTargetFile = filePathWithBrackets[1];
+                    contextMenuTargetFile = filePath;
 
-                        // 显示右键菜单
-                        const menu = document.getElementById('context-menu');
-                        menu.style.display = 'block';
-                        menu.style.left = e.pageX + 'px';
-                        menu.style.top = e.pageY + 'px';
-                    }
+                    // 显示右键菜单
+                    const menu = document.getElementById('context-menu');
+                    menu.style.display = 'block';
+                    menu.style.left = e.pageX + 'px';
+                    menu.style.top = e.pageY + 'px';
                 }
             });            // 处理菜单项点击
+            document.getElementById('collapse-all').addEventListener('click', () => {
+                // 折叠所有文件组
+                const fileHeaders = document.querySelectorAll('.file-header');
+                fileHeaders.forEach(header => {
+                    header.classList.add('collapsed');
+                    const resultList = header.nextElementSibling;
+                    if (resultList) {
+                        resultList.classList.add('collapsed');
+                    }
+                });
+                // 隐藏右键菜单
+                document.getElementById('context-menu').style.display = 'none';
+            });
+
+            // 处理菜单项点击
             document.getElementById('filter-file-ext').addEventListener('click', () => {
                 if (contextMenuTargetFile) {
                     // 获取文件扩展名
@@ -302,6 +323,8 @@
                         });
                     }
                 }
+                // 隐藏右键菜单
+                document.getElementById('context-menu').style.display = 'none';
             });
 
             // 复制文件名
@@ -313,6 +336,8 @@
                         text: fileName
                     });
                 }
+                // 隐藏右键菜单
+                document.getElementById('context-menu').style.display = 'none';
             });
 
             // 复制文件路径
@@ -323,6 +348,8 @@
                         text: contextMenuTargetFile
                     });
                 }
+                // 隐藏右键菜单
+                document.getElementById('context-menu').style.display = 'none';
             });
 
             // 在资源管理器中打开
@@ -333,6 +360,8 @@
                         filePath: contextMenuTargetFile
                     });
                 }
+                // 隐藏右键菜单
+                document.getElementById('context-menu').style.display = 'none';
             });
 
             // 处理搜索输入框事件
@@ -466,7 +495,7 @@
                         <div class="file-group">
                             <div class="file-header">
                                 <span class="collapse-icon">▼</span>
-                                <span class="file-path">${fileName} (${file})</span>
+                                <span class="file-name">${fileName}</span> (<span class="file-path">${file}</span>)
                             </div>
                             <div class="result-list">
                             ${resultItems}

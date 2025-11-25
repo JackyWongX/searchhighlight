@@ -297,19 +297,19 @@ class RipGrepSearch {
 
             const startDir = path.dirname(startFilePath);
             const dirs: string[] = [];
-            let current = startDir;
             const root = workspaceFolder.uri.fsPath;
 
             // 收集从当前目录到根目录的所有目录
+            let current = startDir;
             while (true) {
                 dirs.push(current);
                 const parent = path.dirname(current);
                 if (parent === current) {
-                    break; // 到达根目录
+                    break; // 到达文件系统根目录
                 }
                 current = parent;
-                // 如果到达工作空间根目录，停止
-                if (path.relative(root, current) === '' || current === root) {
+                if (current === root) {
+                    dirs.push(current);
                     break;
                 }
             }
@@ -344,6 +344,41 @@ class RipGrepSearch {
                     onResults([...allResults]);
                 }
             }
+
+            // 搜索根目录的其他内容，排除已搜索的路径目录
+            const excludedDirs = dirs.slice(0, -1).filter(dir => dir.startsWith(root + path.sep));
+            const additionalExcludes = excludedDirs.flatMap(relDir => {
+                const rel = path.relative(root, relDir);
+                return ['--glob', `!**/${rel}`];
+            });
+
+            if (!token?.isCancellationRequested) {
+                progress?.report({ message: `搜索目录: 根目录其他内容` });
+
+                const rgArgs = [
+                    '--line-number',
+                    '--no-heading',
+                    '--color=never',
+                    '--hidden',
+                    '--no-ignore',
+                    '--max-columns=1000',
+                    '--fixed-strings',
+                    ...(matchWholeWord ? ['--word-regexp'] : []),
+                    ...(caseSensitive ? [] : ['-i']),
+                    ...excludeArgs,
+                    ...additionalExcludes,
+                    '--',
+                    searchText,
+                    root
+                ];
+
+                const rootResults = await this.executeRipGrep(rgArgs, caseSensitive, matchWholeWord, searchText);
+                allResults.push(...rootResults);
+                if (onResults) {
+                    onResults([...allResults]);
+                }
+            }
+
             return allResults;
         } else {
             // 原始搜索逻辑
