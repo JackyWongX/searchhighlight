@@ -1,12 +1,14 @@
 .vscode/**
 .vscode-test/**
+.vscode-test.mjs
 src/**
 !src/webview.html
 **/tsconfig.json
 **/.eslintrc.json
+eslint.config.mjs
 **/*.map
 **/*.ts
 .gitignore
-images/展示.gif
+build-vsix.bat
 images/*.gif
 out/test/**

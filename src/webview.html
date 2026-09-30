@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src {{cspSource}} data:; style-src 'unsafe-inline'; script-src 'nonce-{{nonce}}';">
     <title>Search Results</title>    <style>
         body {
             padding: 10px;
@@ -35,10 +36,10 @@
             display: flex;
             gap: 4px;
         }
-        .file-group {
+        .dir-group {
             margin-bottom: 1px;
         }
-        .file-header {
+        .dir-header {
             padding: 4px 8px;
             cursor: pointer;
             background-color: rgba(22, 130, 214, 0.2);
@@ -48,24 +49,21 @@
             align-items: center;
             color: var(--vscode-sideBarTitle-foreground);
         }
-        .file-path {
-            color: orange;
-        }
-        .file-name {
-            color: orange;
-        }
-        .file-path {
-            color: var(--vscode-editor-foreground);
-        }
-        .file-header:hover {
+        .dir-header:hover {
             background-color: var(--vscode-list-hoverBackground);
         }
-        .file-header .collapse-icon {
-            margin-right: 0px;
+        .dir-header .collapse-icon {
+            margin-right: 4px;
             transition: transform 0.2s;
         }
-        .file-header.collapsed .collapse-icon {
+        .dir-header.collapsed .collapse-icon {
             transform: rotate(-90deg);
+        }
+        .dir-path {
+            color: var(--vscode-editor-foreground);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
         .result-list {
             margin-left: 15px;
@@ -80,7 +78,10 @@
             font-family: var(--vscode-editor-font-family);
             display: flex;
             align-items: baseline;
+            /* 文件、行号、函数、行内容之间只用 2 个空格的间距 */
+            gap: 2ch;
             line-height: 1.5;
+            white-space: nowrap;
         }
         .result-item:hover {
             background-color: var(--vscode-list-hoverBackground);
@@ -92,25 +93,44 @@
         .result-item.selected .line-content {
             color: var(--vscode-list-activeSelectionForeground);
         }
-        .line-number {
+        .result-location {
+            flex: 0 1 auto;
+            display: flex;
+            align-items: baseline;
+            min-width: 0;
+            overflow: hidden;
+        }
+        .result-file-name {
+            flex: 0 1 auto;
+            color: var(--vscode-charts-orange, orange);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .result-line-number {
+            flex: 0 0 auto;
             color: var(--vscode-editorLineNumber-foreground);
-            min-width: 50px;
-            padding-right: 16px;
-            text-align: right;
+        }
+        .result-function {
+            flex: 0 1 auto;
+            min-width: 0;
+            color: var(--vscode-textLink-foreground);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .result-function.empty {
+            color: var(--vscode-disabledForeground);
         }
         .line-content {
-            white-space: pre-wrap;
             flex: 1;
+            min-width: 0;
             color: var(--vscode-editor-foreground);
             opacity: 1;
-            white-space: nowrap;
-        }
-        .file-path {
-            white-space: pre-wrap;
-            flex: 1;
-            color: var(--vscode-editor-foreground);
-            opacity: 1;
-            white-space: nowrap;
+            /* 行首缩进已由扩展侧过滤，这里只负责不换行与超出显示省略号 */
+            white-space: pre;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
         .highlight-read, .highlight-write {
             white-space: nowrap;
@@ -191,36 +211,81 @@
         <div class="context-menu-item" id="copy-file-name">复制文件名</div>
         <div class="context-menu-item" id="copy-file-path">复制文件路径</div>
         <div class="context-menu-item" id="open-in-explorer">在资源管理器中打开</div>
-    </div>    <script>
+    </div>    <script nonce="{{nonce}}">
         (function() {
             const vscode = acquireVsCodeApi();
             const path = {
                 basename: function(filePath) {
                     return filePath.replace(/^.*[\\\/]/, '');
+                },
+                dirname: function(filePath) {
+                    return filePath.replace(/[\\\/][^\\\/]*$/, '');
                 }
             };
-            let currentColors = {
+
+            // HTML 转义，避免代码内容中的特殊字符被当作标签解析
+            function escapeHtml(text) {
+                return String(text === undefined || text === null ? '' : text)
+                    .replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;')
+                    .replace(/"/g, '&quot;')
+                    .replace(/'/g, '&#39;');
+            }
+            // 默认高亮颜色，同时作为非法颜色配置的回退值
+            const DEFAULT_COLORS = {
                 read: 'rgba(64, 200, 64, 0.2)',
                 write: 'rgba(240, 64, 64, 0.2)'
             };
+            let currentColors = { ...DEFAULT_COLORS };
             let searchOptions = {
                 caseSensitive: true,
                 matchWholeWord: true
             };
             let currentSelectedItem = null;
+            let colorsStyleEl = null;
+            // 当前搜索序号，用于识别新的一次搜索
+            let currentSearchId = null;
+            // 已渲染结果的定位键，增量追加时用来去重
+            let renderedKeys = new Set();
+            // 目录路径 -> 该目录下的结果列表节点
+            let groupElements = new Map();
+            let renderedTotal = 0;
+            let renderedWriteCount = 0;
 
-            // 更新样式
+            // 只接受合法的 CSS 颜色，避免配置里的内容被当作样式注入
+            function safeColor(value, fallback) {
+                if (typeof value !== 'string' || !value.trim()) {
+                    return fallback;
+                }
+                try {
+                    if (window.CSS && typeof window.CSS.supports === 'function' && window.CSS.supports('color', value)) {
+                        return value;
+                    }
+                } catch {
+                    return fallback;
+                }
+                return fallback;
+            }
+
+            // 更新样式（复用同一个 style 节点，避免每次推送都新增节点）
             function updateColors(colors) {
-                const style = document.createElement('style');
-                style.textContent = `
+                if (!colorsStyleEl) {
+                    colorsStyleEl = document.createElement('style');
+                    document.head.appendChild(colorsStyleEl);
+                }
+                currentColors = {
+                    read: safeColor(colors.read, DEFAULT_COLORS.read),
+                    write: safeColor(colors.write, DEFAULT_COLORS.write)
+                };
+                colorsStyleEl.textContent = `
                     .highlight-read {
-                        background-color: ${colors.read};
+                        background-color: ${currentColors.read};
                     }
                     .highlight-write {
-                        background-color: ${colors.write};
+                        background-color: ${currentColors.write};
                     }
                 `;
-                document.head.appendChild(style);
             }
 
             // 更新按钮状态
@@ -239,19 +304,35 @@
                 } else {
                     wholeWordBtn.classList.remove('active');
                 }
-            }            // 全局变量用于存储右键菜单点击的文件
-            let contextMenuTargetFile = null;
+            }
+
+            // 右键菜单当前作用的目标，可能是目录头或结果行
+            let contextMenuTarget = null;
+
+            // 根据目标类型显示或隐藏菜单项
+            function updateContextMenuItems(targetType) {
+                const visibility = {
+                    'collapse-all': targetType === 'dir',
+                    'filter-file-ext': targetType === 'file',
+                    'copy-file-name': targetType === 'file',
+                    'copy-file-path': true,
+                    'open-in-explorer': true
+                };
+                Object.keys(visibility).forEach(id => {
+                    document.getElementById(id).style.display = visibility[id] ? '' : 'none';
+                });
+            }
 
             // 处理点击事件
             document.addEventListener('click', (e) => {
                 // 隐藏右键菜单
                 document.getElementById('context-menu').style.display = 'none';
 
-                const fileHeader = e.target.closest('.file-header');
-                if (fileHeader) {
-                    // 处理文件组的折叠/展开
-                    fileHeader.classList.toggle('collapsed');
-                    const resultList = fileHeader.nextElementSibling;
+                const dirHeader = e.target.closest('.dir-header');
+                if (dirHeader) {
+                    // 处理目录组的折叠/展开
+                    dirHeader.classList.toggle('collapsed');
+                    const resultList = dirHeader.nextElementSibling;
                     if (resultList) {
                         resultList.classList.toggle('collapsed');
                     }
@@ -280,26 +361,48 @@
 
             // 处理右键菜单
             document.addEventListener('contextmenu', (e) => {
-                // 检查是否右键点击了文件头部
-                const fileHeader = e.target.closest('.file-header');
-                if (fileHeader) {
-                    e.preventDefault(); // 阻止默认右键菜单
-
-                    // 从文件头部获取文件路径
-                    const filePath = fileHeader.querySelector('.file-path').textContent;
-                    contextMenuTargetFile = filePath;
-
-                    // 显示右键菜单
-                    const menu = document.getElementById('context-menu');
-                    menu.style.display = 'block';
-                    menu.style.left = e.pageX + 'px';
-                    menu.style.top = e.pageY + 'px';
+                const dirHeader = e.target.closest('.dir-header');
+                const resultItem = e.target.closest('.result-item');
+                if (!dirHeader && !resultItem) {
+                    // 右键非结果区域时收起菜单
+                    document.getElementById('context-menu').style.display = 'none';
+                    return;
                 }
-            });            // 处理菜单项点击
+
+                e.preventDefault(); // 阻止默认右键菜单
+
+                if (resultItem) {
+                    // 右键结果行：对具体文件操作
+                    contextMenuTarget = {
+                        type: 'file',
+                        fullPath: resultItem.dataset.file
+                    };
+                } else {
+                    // 右键目录头：对目录操作
+                    contextMenuTarget = {
+                        type: 'dir',
+                        fullPath: dirHeader.querySelector('.dir-path').textContent
+                    };
+                }
+                updateContextMenuItems(contextMenuTarget.type);
+
+                // 显示右键菜单
+                const menu = document.getElementById('context-menu');
+                menu.style.display = 'block';
+
+                // 避免菜单超出可视区域
+                const menuRect = menu.getBoundingClientRect();
+                const maxLeft = window.scrollX + document.documentElement.clientWidth - menuRect.width;
+                const maxTop = window.scrollY + document.documentElement.clientHeight - menuRect.height;
+                menu.style.left = Math.max(window.scrollX, Math.min(e.pageX, maxLeft)) + 'px';
+                menu.style.top = Math.max(window.scrollY, Math.min(e.pageY, maxTop)) + 'px';
+            });
+
+            // 处理菜单项点击
             document.getElementById('collapse-all').addEventListener('click', () => {
-                // 折叠所有文件组
-                const fileHeaders = document.querySelectorAll('.file-header');
-                fileHeaders.forEach(header => {
+                // 折叠所有目录组
+                const dirHeaders = document.querySelectorAll('.dir-header');
+                dirHeaders.forEach(header => {
                     header.classList.add('collapsed');
                     const resultList = header.nextElementSibling;
                     if (resultList) {
@@ -312,9 +415,9 @@
 
             // 处理菜单项点击
             document.getElementById('filter-file-ext').addEventListener('click', () => {
-                if (contextMenuTargetFile) {
+                if (contextMenuTarget && contextMenuTarget.type === 'file') {
                     // 获取文件扩展名
-                    const fileExt = contextMenuTargetFile.split('.').pop();
+                    const fileExt = contextMenuTarget.fullPath.split('.').pop();
                     if (fileExt) {
                         // 发送消息到扩展以添加到过滤列表
                         vscode.postMessage({
@@ -329,8 +432,8 @@
 
             // 复制文件名
             document.getElementById('copy-file-name').addEventListener('click', () => {
-                if (contextMenuTargetFile) {
-                    const fileName = path.basename(contextMenuTargetFile);
+                if (contextMenuTarget && contextMenuTarget.type === 'file') {
+                    const fileName = path.basename(contextMenuTarget.fullPath);
                     vscode.postMessage({
                         type: 'copyToClipboard',
                         text: fileName
@@ -342,10 +445,10 @@
 
             // 复制文件路径
             document.getElementById('copy-file-path').addEventListener('click', () => {
-                if (contextMenuTargetFile) {
+                if (contextMenuTarget) {
                     vscode.postMessage({
                         type: 'copyToClipboard',
-                        text: contextMenuTargetFile
+                        text: contextMenuTarget.fullPath
                     });
                 }
                 // 隐藏右键菜单
@@ -354,10 +457,10 @@
 
             // 在资源管理器中打开
             document.getElementById('open-in-explorer').addEventListener('click', () => {
-                if (contextMenuTargetFile) {
+                if (contextMenuTarget) {
                     vscode.postMessage({
                         type: 'openInExplorer',
-                        filePath: contextMenuTargetFile
+                        filePath: contextMenuTarget.fullPath
                     });
                 }
                 // 隐藏右键菜单
@@ -404,7 +507,8 @@
 
             // 处理来自扩展的消息
             window.addEventListener('message', event => {
-                const message = event.data;                switch (message.type) {
+                const message = event.data;
+                switch (message.type) {
                     case 'results':
                         if (message.colors) {
                             currentColors = message.colors;
@@ -417,11 +521,12 @@
                         if (message.searchText) {
                             document.getElementById('search-input').value = message.searchText;
                         }
-                        updateResults(message.results, message.searchText);
-                        break;
-                    case 'updateSearchOptions':
-                        searchOptions = message.searchOptions;
-                        updateButtonStates();
+                        // 新的一次搜索先清掉上次的结果，避免新旧结果混在一起
+                        if (message.searchId !== currentSearchId) {
+                            currentSearchId = message.searchId;
+                            resetResults();
+                        }
+                        updateResults(message.results, message.mode || 'final', message.total);
                         break;
                     case 'focusSearch':
                         document.getElementById('search-input').focus();
@@ -432,77 +537,187 @@
             // 初始化默认颜色
             updateColors(currentColors);
 
-            // 更新搜索结果显示
-            function updateResults(results, searchText) {
-                console.log('updateResults called with results:', results);
-                if (currentSelectedItem) {
-                    currentSelectedItem.classList.remove('selected');
-                    currentSelectedItem = null;
+            // 清空结果，重置增量渲染状态
+            function resetResults() {
+                document.getElementById('results').innerHTML = '';
+                renderedKeys = new Set();
+                groupElements = new Map();
+                renderedTotal = 0;
+                renderedWriteCount = 0;
+                currentSelectedItem = null;
+            }
+
+            function updateSummary(total, writeCount) {
+                document.getElementById('summary-text').textContent =
+                    `找到 ${total} 处匹配：${total - writeCount} 处读操作，${writeCount} 处写操作`;
+            }
+
+            // 生成单条结果的 HTML
+            function renderItemHtml(result) {
+                const line = result.lineContent;
+                const highlightClass = result.isWrite ? 'highlight-write' : 'highlight-read';
+
+                // 创建带有高亮的行内容
+                const matchStart = result.matchStart === undefined ? 0 : result.matchStart;
+                const matchEnd = result.matchEnd === undefined ? matchStart : result.matchEnd;
+                const highlightedLine =
+                    escapeHtml(line.substring(0, matchStart)) +
+                    `<span class="${highlightClass}">${escapeHtml(line.substring(matchStart, matchEnd))}</span>` +
+                    escapeHtml(line.substring(matchEnd));
+
+                const functionName = result.functionName || '-';
+                const functionClass = result.functionName ? 'result-function' : 'result-function empty';
+                // 取不到函数名时说明原因（没有符号提供者、命中文件过多等）
+                const functionTitle = result.functionName || result.functionNameHint || '';
+
+                return `
+                    <div class="result-item" data-file="${escapeHtml(result.file)}" data-file-name="${escapeHtml(result.fileName)}" data-line="${result.line}">
+                        <span class="result-location">
+                            <span class="result-file-name" title="${escapeHtml(result.file)}">${escapeHtml(result.fileName)}</span><span class="result-line-number">:${result.line + 1}</span>
+                        </span>
+                        <span class="${functionClass}" title="${escapeHtml(functionTitle)}">${escapeHtml(functionName)}</span>
+                        <span class="line-content" title="${escapeHtml(line)}">${highlightedLine}</span>
+                    </div>
+                `;
+            }
+
+            // 按需创建目录分组节点
+            function ensureGroup(dir) {
+                let group = groupElements.get(dir);
+                if (group) {
+                    return group;
                 }
 
-                const summaryTextEl = document.getElementById('summary-text');
-                const resultsEl = document.getElementById('results');
+                const groupEl = document.createElement('div');
+                groupEl.className = 'dir-group';
 
-                // 统计读写操作数量
-                const writeCount = results.filter(r => r.isWrite).length;
-                const readCount = results.length - writeCount;
+                const header = document.createElement('div');
+                header.className = 'dir-header';
+                const icon = document.createElement('span');
+                icon.className = 'collapse-icon';
+                icon.textContent = '▼';
+                const dirPath = document.createElement('span');
+                dirPath.className = 'dir-path';
+                dirPath.textContent = dir;
+                dirPath.title = dir;
+                header.appendChild(icon);
+                header.appendChild(dirPath);
 
-                // 更新统计信息
-                summaryTextEl.textContent = `找到 ${results.length} 处匹配：${readCount} 处读操作，${writeCount} 处写操作`;
+                const list = document.createElement('div');
+                list.className = 'result-list';
 
-                // 按文件分组结果
-                const groupedResults = {};
-                results.forEach(result => {
-                    if (!groupedResults[result.file]) {
-                        groupedResults[result.file] = [];
+                groupEl.appendChild(header);
+                groupEl.appendChild(list);
+                document.getElementById('results').appendChild(groupEl);
+
+                group = { list };
+                groupElements.set(dir, group);
+                return group;
+            }
+
+            // 目录内按文件名、行号升序
+            function sortGroup(list) {
+                const items = Array.from(list.children);
+                items.sort((a, b) => {
+                    const nameCompare = a.dataset.fileName.localeCompare(b.dataset.fileName);
+                    return nameCompare !== 0 ? nameCompare : Number(a.dataset.line) - Number(b.dataset.line);
+                });
+                // appendChild 移动的是已有节点，不会丢失节点上的状态
+                items.forEach(item => list.appendChild(item));
+            }
+
+            // 追加渲染新结果，已经在视图里的结果会被跳过
+            function appendResults(results) {
+                if (!results || results.length === 0) {
+                    return;
+                }
+
+                const pendingHtml = new Map();
+                for (const result of results) {
+                    const key = result.file + ':' + result.line;
+                    if (renderedKeys.has(key)) {
+                        continue;
+                    }
+                    renderedKeys.add(key);
+                    renderedTotal++;
+                    if (result.isWrite) {
+                        renderedWriteCount++;
                     }
 
-                    // 检查是否已经存在相同行的结果
-                    const existingLineResult = groupedResults[result.file].find(r => r.line === result.line);
-                    if (!existingLineResult) {
-                        groupedResults[result.file].push(result);
+                    const dir = path.dirname(result.file);
+                    pendingHtml.set(dir, (pendingHtml.get(dir) || '') + renderItemHtml(result));
+                }
+
+                for (const [dir, html] of pendingHtml) {
+                    const group = ensureGroup(dir);
+                    group.list.insertAdjacentHTML('beforeend', html);
+                    // 新结果可能插在中间，排序一次保证顺序正确
+                    sortGroup(group.list);
+                }
+            }
+
+            // 记录整体刷新前需要保留的视图状态
+            function captureViewState() {
+                const collapsedDirs = new Set();
+                document.querySelectorAll('.dir-header.collapsed').forEach(header => {
+                    const dirPath = header.querySelector('.dir-path');
+                    if (dirPath) {
+                        collapsedDirs.add(dirPath.textContent);
+                    }
+                });
+                return {
+                    collapsedDirs,
+                    selectedKey: currentSelectedItem
+                        ? currentSelectedItem.dataset.file + ':' + currentSelectedItem.dataset.line
+                        : null,
+                    scrollTop: document.documentElement.scrollTop || document.body.scrollTop || 0
+                };
+            }
+
+            // 更新搜索结果显示：增量消息只追加，最终消息整体刷新
+            function updateResults(results, mode, total) {
+                if (mode !== 'final') {
+                    appendResults(results);
+                    updateSummary(Math.max(total || 0, renderedTotal), renderedWriteCount);
+                    return;
+                }
+
+                // 整体刷新会重建 DOM，先记录需要保留的视图状态
+                const state = captureViewState();
+                resetResults();
+                appendResults(results);
+                updateSummary(renderedTotal, renderedWriteCount);
+
+                // 恢复折叠状态
+                document.querySelectorAll('.dir-group').forEach(group => {
+                    const header = group.querySelector('.dir-header');
+                    const dirPath = header ? header.querySelector('.dir-path') : null;
+                    if (!header || !dirPath || !state.collapsedDirs.has(dirPath.textContent)) {
+                        return;
+                    }
+                    header.classList.add('collapsed');
+                    const resultList = header.nextElementSibling;
+                    if (resultList) {
+                        resultList.classList.add('collapsed');
                     }
                 });
 
-                console.log('groupedResults:', groupedResults);
+                // 恢复选中项
+                if (state.selectedKey) {
+                    for (const item of document.querySelectorAll('.result-item')) {
+                        if (item.dataset.file + ':' + item.dataset.line === state.selectedKey) {
+                            item.classList.add('selected');
+                            currentSelectedItem = item;
+                            break;
+                        }
+                    }
+                }
 
-                // 生成分组后的 HTML
-                resultsEl.innerHTML = Object.entries(groupedResults).map(([file, fileResults]) => {
-                    // 按行号升序排序
-                    fileResults.sort((a, b) => a.line - b.line);
-
-                    // 从第一个结果中获取文件名
-                    const fileName = fileResults[0].fileName;
-                    const resultItems = fileResults.map(result => {
-                        const line = result.lineContent;
-                        const highlightClass = result.isWrite ? 'highlight-write' : 'highlight-read';
-
-                        // 创建带有高亮的行内容
-                        const beforeMatch = line.substring(0, result.matchStart);
-                        const match = line.substring(result.matchStart, result.matchEnd);
-                        const afterMatch = line.substring(result.matchEnd);
-
-                        const highlightedLine = `${beforeMatch}<span class="${highlightClass}">${match}</span>${afterMatch}`;
-
-                        return `
-                            <div class="result-item" data-file="${result.file}" data-line="${result.line}">
-                                <span class="line-content">${result.line + 1} ${highlightedLine}</span>
-                            </div>
-                        `;
-                    }).join('');
-
-                    return `
-                        <div class="file-group">
-                            <div class="file-header">
-                                <span class="collapse-icon">▼</span>
-                                <span class="file-name">${fileName}</span> (<span class="file-path">${file}</span>)
-                            </div>
-                            <div class="result-list">
-                            ${resultItems}
-                            </div>
-                        </div>
-                    `;
-                }).join('');
+                // 恢复滚动位置，避免整体刷新时视图跳回顶部
+                if (state.scrollTop > 0) {
+                    document.documentElement.scrollTop = state.scrollTop;
+                    document.body.scrollTop = state.scrollTop;
+                }
             }
         }())
     </script>
