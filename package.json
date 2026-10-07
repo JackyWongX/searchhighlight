@@ -162,7 +162,6 @@
                 "append",
                 "assign",
                 "clear",
-                "close",
                 "copy",
                 "delete",
                 "emplace",

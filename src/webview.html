@@ -526,7 +526,7 @@
                             currentSearchId = message.searchId;
                             resetResults();
                         }
-                        updateResults(message.results, message.mode || 'final', message.total);
+                        updateResults(message.results, message.mode || 'final');
                         break;
                     case 'focusSearch':
                         document.getElementById('search-input').focus();
@@ -615,15 +615,22 @@
                 return group;
             }
 
-            // 目录内按文件名、行号升序
+            function compareResultItems(a, b) {
+                const nameCompare = a.dataset.fileName.localeCompare(b.dataset.fileName);
+                return nameCompare !== 0 ? nameCompare : Number(a.dataset.line) - Number(b.dataset.line);
+            }
+
+            // 目录内按文件名、行号升序。已经有序时不再搬动节点
             function sortGroup(list) {
                 const items = Array.from(list.children);
-                items.sort((a, b) => {
-                    const nameCompare = a.dataset.fileName.localeCompare(b.dataset.fileName);
-                    return nameCompare !== 0 ? nameCompare : Number(a.dataset.line) - Number(b.dataset.line);
-                });
-                // appendChild 移动的是已有节点，不会丢失节点上的状态
-                items.forEach(item => list.appendChild(item));
+                for (let i = 1; i < items.length; i++) {
+                    if (compareResultItems(items[i - 1], items[i]) > 0) {
+                        items.sort(compareResultItems);
+                        // appendChild 移动的是已有节点，不会丢失节点上的状态
+                        items.forEach(item => list.appendChild(item));
+                        return;
+                    }
+                }
             }
 
             // 追加渲染新结果，已经在视图里的结果会被跳过
@@ -675,10 +682,11 @@
             }
 
             // 更新搜索结果显示：增量消息只追加，最终消息整体刷新
-            function updateResults(results, mode, total) {
+            function updateResults(results, mode) {
                 if (mode !== 'final') {
                     appendResults(results);
-                    updateSummary(Math.max(total || 0, renderedTotal), renderedWriteCount);
+                    // 总数和写操作数都按已经画出来的结果算，过渡期两边才对得上
+                    updateSummary(renderedTotal, renderedWriteCount);
                     return;
                 }
 

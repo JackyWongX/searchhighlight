@@ -6,7 +6,7 @@ import * as crypto from 'crypto';
 import * as jschardet from 'jschardet';
 import * as iconv from 'iconv-lite';
 import { StringDecoder } from 'string_decoder';
-import { WriteOperationDetector, WritePatterns, isHashCommentFile } from './writeDetector';
+import { WriteOperationDetector, WritePatterns, buildIdentifierSearchRegex, chooseMatchRange, isDashCommentFile, isHashCommentFile } from './writeDetector';
 
 interface SearchResult {
     file: string;
@@ -493,11 +493,8 @@ class RipGrepSearch {
     }
 
     // 构建与 highlightSearchText 一致的匹配正则，用于 ripgrep 未提供匹配位置时的兜底
-    private static buildSearchRegex(searchText: string, caseSensitive: boolean, matchWholeWord: boolean): RegExp {
-        const flags = caseSensitive ? 'g' : 'gi';
-        const wordBoundary = matchWholeWord ? '\\b' : '';
-        const escapedSearchText = searchText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        return new RegExp(`${wordBoundary}${escapedSearchText}${wordBoundary}`, flags);
+    static buildSearchRegex(searchText: string, caseSensitive: boolean, matchWholeWord: boolean): RegExp {
+        return buildIdentifierSearchRegex(searchText, caseSensitive, matchWholeWord);
     }
 
     // 解析 --json 输出中的路径字段
@@ -566,16 +563,15 @@ class RipGrepSearch {
         return encoding;
     }
 
-    // 判断某一行是否属于注释：C 风格注释对所有语言生效，# 注释只在支持它的语言里生效
+    // 判断某一行是否属于注释。// 和 /* 对所有语言生效，# 与 -- 只在使用它们的语言里生效
     private static isCommentLine(filePath: string, trimmedLine: string): boolean {
-        if (trimmedLine.startsWith('//')) {
+        if (trimmedLine.startsWith('//') || trimmedLine.startsWith('/*')) {
             return true;
         }
-        if (!trimmedLine.startsWith('#')) {
-            return false;
+        if (trimmedLine.startsWith('#') && isHashCommentFile(filePath)) {
+            return true;
         }
-
-        return isHashCommentFile(filePath);
+        return trimmedLine.startsWith('--') && isDashCommentFile(filePath);
     }
 
     // 判断样本编码，检测结果不可信时按 GB18030 处理
@@ -612,26 +608,36 @@ class RipGrepSearch {
         return high / sample.length;
     }
 
-    // 计算匹配位置：优先使用 ripgrep 给出的字节偏移，保证中文等非 ASCII 字符也能正确定位
-    private static resolveMatchRange(content: string, submatches: any, fallbackRegex: RegExp, decoded: DecodedLine): { start: number; end: number } | undefined {
-        if (Array.isArray(submatches) && submatches.length > 0) {
-            const first = submatches[0];
-            if (typeof first.start === 'number' && typeof first.end === 'number') {
-                const start = RipGrepSearch.byteOffsetToCharIndex(decoded, first.start);
-                const end = RipGrepSearch.byteOffsetToCharIndex(decoded, first.end);
+    // 计算这一行里每一次被搜索字符串的位置。优先使用 ripgrep 的字节偏移
+    private static resolveMatchRanges(content: string, submatches: any, fallbackRegex: RegExp, decoded: DecodedLine): { start: number; end: number }[] {
+        const ranges: { start: number; end: number }[] = [];
+        if (Array.isArray(submatches)) {
+            for (const sub of submatches) {
+                if (typeof sub?.start !== 'number' || typeof sub?.end !== 'number') {
+                    continue;
+                }
+                const start = RipGrepSearch.byteOffsetToCharIndex(decoded, sub.start);
+                const end = RipGrepSearch.byteOffsetToCharIndex(decoded, sub.end);
                 if (end > start) {
-                    return { start, end };
+                    ranges.push({ start, end });
                 }
             }
         }
-
-        // 兜底：按搜索条件自己再匹配一次
-        fallbackRegex.lastIndex = 0;
-        const match = fallbackRegex.exec(content);
-        if (match && match[0].length > 0) {
-            return { start: match.index, end: match.index + match[0].length };
+        if (ranges.length > 0) {
+            return ranges;
         }
-        return undefined;
+
+        // 兜底：按搜索条件自己再匹配每一次
+        fallbackRegex.lastIndex = 0;
+        let match: RegExpExecArray | null;
+        while ((match = fallbackRegex.exec(content)) !== null) {
+            if (match[0].length === 0) {
+                fallbackRegex.lastIndex++;
+                continue;
+            }
+            ranges.push({ start: match.index, end: match.index + match[0].length });
+        }
+        return ranges;
     }
 
     // 用同一编码解码字节前缀，把字节偏移精确换算成字符下标
@@ -771,23 +777,22 @@ class RipGrepSearch {
                     return;
                 }
 
-                const matchRange = RipGrepSearch.resolveMatchRange(content, data.submatches, fallbackRegex, decodedLine);
-                if (!matchRange) {
+                const matchRanges = RipGrepSearch.resolveMatchRanges(content, data.submatches, fallbackRegex, decodedLine);
+                // 只看被搜索的那几个名字。同一行又读又写时，标出写的那一次
+                const chosen = chooseMatchRange(writeDetector, content, matchRanges, filePath);
+                if (!chosen) {
                     return;
                 }
                 seenLocations.add(key);
 
-                // 根据匹配项前后的文本判断是写操作还是读操作
-                const afterText = content.substring(matchRange.end);
-                const beforeText = content.substring(0, matchRange.start);
-                const display = RipGrepSearch.buildDisplayContent(content, matchRange.start, matchRange.end);
+                const display = RipGrepSearch.buildDisplayContent(content, chosen.start, chosen.end);
 
                 const result: SearchResult = {
                     file: filePath,
                     fileName: path.basename(filePath),
                     line: lineNumber - 1,
                     lineContent: display.content,
-                    isWrite: writeDetector.isWriteOperation(afterText, beforeText, filePath),
+                    isWrite: chosen.isWrite,
                     matchStart: display.matchStart,
                     matchEnd: display.matchEnd
                 };
@@ -857,11 +862,11 @@ class RipGrepSearch {
         });
     }
 
-    public async search(searchText: string, startFilePath?: string, onResults?: (results: SearchResult[], isFinal: boolean, total: number) => void, progress?: { report: (msg: { message: string }) => void }, token?: vscode.CancellationToken): Promise<SearchResult[]> {
+    public async search(searchText: string, startFilePath?: string, onResults?: (results: SearchResult[], isFinal: boolean) => void, progress?: { report: (msg: { message: string }) => void }, token?: vscode.CancellationToken): Promise<SearchResult[]> {
         const workspaceFolders = vscode.workspace.workspaceFolders;
 
         if (!workspaceFolders || workspaceFolders.length === 0 || !searchText.trim()) {
-            onResults?.([], true, 0);
+            onResults?.([], true);
             return [];
         }
 
@@ -921,7 +926,7 @@ class RipGrepSearch {
             const delta = deltaBuffer;
             deltaBuffer = [];
             lastFlushAt = Date.now();
-            onResults(delta, false, allResults.length);
+            onResults(delta, false);
         };
 
         const scheduleFlush = (): void => {
@@ -978,7 +983,7 @@ class RipGrepSearch {
         await functionResolver.enrichResults(allResults, token);
 
         const finalResults = this.rankResults(allResults, startDir, activeFilePath);
-        onResults?.(finalResults, true, finalResults.length);
+        onResults?.(finalResults, true);
         return finalResults;
     }
 
@@ -1123,11 +1128,11 @@ class SearchResultsProvider implements vscode.WebviewViewProvider {
     }
 
     public showResults(results: SearchResult[], searchText: string) {
-        this._postResults(results, searchText, 'final', this._searchId, results.length);
+        this._postResults(results, searchText, 'final', this._searchId);
     }
 
     // 把结果推送给视图：delta 用于搜索过程中的增量追加，final 用最终结果整体刷新
-    private _postResults(results: SearchResult[], searchText: string, mode: 'delta' | 'final', searchId: number, total: number) {
+    private _postResults(results: SearchResult[], searchText: string, mode: 'delta' | 'final', searchId: number) {
         if (!this._view) {
             return;
         }
@@ -1150,8 +1155,7 @@ class SearchResultsProvider implements vscode.WebviewViewProvider {
             },
             searchOptions: this._getSearchOptions(),
             mode,
-            searchId,
-            total
+            searchId
         });
     }
 
@@ -1188,12 +1192,12 @@ class SearchResultsProvider implements vscode.WebviewViewProvider {
             }, async (progress, token) => {
                 const cancellation = token.onCancellationRequested(() => cts.cancel());
                 try {
-                    await ripGrepSearch.search(searchText, startFilePath, (results, isFinal, total) => {
+                    await ripGrepSearch.search(searchText, startFilePath, (results, isFinal) => {
                         // 丢弃过期搜索的结果
                         if (isStale()) {
                             return;
                         }
-                        this._postResults(results, searchText, isFinal ? 'final' : 'delta', searchId, total);
+                        this._postResults(results, searchText, isFinal ? 'final' : 'delta', searchId);
                     }, progress, cts.token);
                 } catch (error) {
                     if (!isStale()) {
@@ -1255,10 +1259,8 @@ class SearchResultsProvider implements vscode.WebviewViewProvider {
         const readDecorationType = this.getDecorationType(readColor);
         const writeDecorationType = this.getDecorationType(writeColor);
 
-        // 构建搜索正则表达式
-        const flags = caseSensitive ? 'g' : 'gi';
-        const wordBoundary = matchWholeWord ? '\\b' : '';
-        const searchRegex = new RegExp(`${wordBoundary}${this.escapeRegExp(searchText)}${wordBoundary}`, flags);
+        // 与搜索使用同一套全词规则，中文等非 ASCII 标识符也能对上边界
+        const searchRegex = RipGrepSearch.buildSearchRegex(searchText, caseSensitive, matchWholeWord);
 
         // 遍历文档中的每一行
         const readDecorations: vscode.DecorationOptions[] = [];
@@ -1371,11 +1373,6 @@ class SearchResultsProvider implements vscode.WebviewViewProvider {
         this._decorationTypes.forEach(type => type.dispose());
         this._decorationTypes.clear();
     }
-
-    // 转义正则表达式特殊字符
-    private escapeRegExp(string: string) {
-        return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    }
 }
 
 export function activate(context: vscode.ExtensionContext) {
@@ -1452,10 +1449,15 @@ export function activate(context: vscode.ExtensionContext) {
                 // 这些配置会影响搜索结果或读写属性，需要重新搜索
                 const searchKeys = ['patterns', 'caseSensitive', 'matchWholeWord',
                     'excludePatterns', 'excludeFileExtensions', 'respectGitIgnore'];
-                if (searchKeys.some(key => e.affectsConfiguration(`searchhighlight.${key}`))) {
+                const changedSearchKeys = searchKeys.filter(key => e.affectsConfiguration(`searchhighlight.${key}`));
+                if (changedSearchKeys.length > 0) {
                     debugLog('搜索相关配置变更，重新执行搜索');
                     void searchResultsProvider.rerunCurrentSearch();
-                    vscode.window.showInformationMessage('搜索高亮配置已更新');
+                    // 大小写、全词按钮会连续点，按钮状态和结果刷新已经是反馈，不再每次弹提示
+                    const onlyToggle = changedSearchKeys.every(key => key === 'caseSensitive' || key === 'matchWholeWord');
+                    if (!onlyToggle) {
+                        vscode.window.showInformationMessage('搜索高亮配置已更新');
+                    }
                 } else if (e.affectsConfiguration('searchhighlight.colors')) {
                     debugLog('更新高亮颜色配置');
                     searchResultsProvider.updateCurrentResults();

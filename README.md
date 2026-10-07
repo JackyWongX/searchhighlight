@@ -30,17 +30,32 @@ SearchHighlight 是一个用于搜索代码中变量、函数等标识符的 VSC
 
 ### 写操作检测规则
 
-插件根据「匹配到的标识符之后、同一行内」的文本判断读写，命中下列任意一条即按写操作高亮：
+插件根据「匹配到的标识符之后、同一行内」的文本判断读写。写操作只算在真正被改掉的那个名字上，用来找到它的前缀不算写。命中下列任意一条即按写操作高亮：
 
-| 写法 | 示例 |
-|------|------|
-| 赋值、自增运算符 | `x = 1`、`x += 1`、`x++`、`x := 1`、`ch <- v` |
-| 带下标、成员、类型注解的赋值 | `x[0] = 1`、`obj.field = 1`、`p->field = 1`、`x: int = 1` |
-| 多重赋值与解构 | `a, b = f()`、`let {a} = obj`、`let [a] = arr` |
-| 会修改自身的成员方法 | `xs.append(v)`、`xs.Add(v)`、`list.push_back(v)`、`obj.setValue(v)` |
-| 会修改第一个实参的函数 | `append(xs, v)`、`memcpy(dst, src)` |
+| 写法 | 谁算写 | 示例 |
+|------|--------|------|
+| 赋值、自增运算符 | 运算符左边这个名字 | `x = 1`、`x += 1`、`x++`、`x := 1`、`ch <- v` |
+| 下标、类型注解 | 仍是这个名字 | `x[0] = 1`、`x: int = 1` |
+| 成员赋值 | 最后那个成员，前面的对象或指针算读 | `obj.field = 1` 写 `field`；`p->field = 1` 写 `field`，`p` 是读 |
+| 多重赋值与解构 | 每个被赋值的名字 | `a, b = f()`、`let {a} = obj`、`let [a] = arr` |
+| 前缀自增 | 真正被加减的那个名字 | `++x`、`--x`；`++p->field` 写 `field`，`p` 是读 |
+| 循环变量、输出参数、别名 | 被绑定或写回的那个名字 | `for x in xs`、`for (x of xs)`、`for (auto x : xs)`、`out x`、`import a as b` |
+| 会修改自身的成员方法 | 点或箭头紧前面的那个对象，而且必须是调用 | `xs.append(v)`、`xs.Add(v)`、`list.push_back(v)`、`p->insert(v)`。`obj.set = 1` 写的是 `set` |
+| 会修改第一个实参的自由函数 | 第一个实参末尾的那个名字 | `append(xs, v)`、`memcpy(dst, src)`、`strcpy(p->date, src)` 写 `date` 不写 `p` |
 
-其余情况一律按读操作高亮。字符串字面量和注释里的同名文本不会被判成写操作，`==`、`===`、`!=`、`=>` 等比较运算符也不会误判成赋值。
+其余情况一律按读操作高亮。字符串字面量、行注释和同一行里的块注释（`/* ... */`）中的同名文本不会被判成写操作。行注释按语言识别：C 系语言的 `//`、Python 等的 `#`、SQL / Lua / Haskell 的 `--`。`==`、`===`、`!=`、`=>` 等比较运算符也不会误判成赋值。
+
+所以搜索 `pOrder` 时，`pOrder = &list[i]`、`++pOrder` 是写，`pOrder->status = Open`、`pOrder->days++`、`*pOrder = 1`、`if (pOrder != nullptr)` 都是读。`int *pOrder = 0` 这种声明仍然是写。同一行里 `pOrder->huicheprice = max(pOrder->huicheprice, high)` 的两个 `pOrder` 都是读，被改的是 `huicheprice`。
+
+同一行里这个名字如果出现多次，结果列表仍只显示一条，但会标在被写的那一次上。例如 `if (x > 0) x = 1` 会把红色标在后面的 `x` 上。`*x = 1` 里 `x` 只是被拿去定位，不算写；`int *x = 1` 里的 `x` 是在声明并赋值，算写。
+
+`list.append(item)` 这种成员调用只把点前面的 `list` 当成被修改的对象，括号里的 `item` 不会因为函数表里也有 `append` 而被判成写。`a.b.append(v)` 只把 `b` 当成写，`a` 是读。`p->insert(pos, value)`、`obj?.erase(it)` 同样只看紧挨着方法的那个对象。
+
+下面几种写法和真正的赋值长得很像，插件只能按行内文本猜测，所以有边界：
+
+- `case FOO:` 里的 `FOO` 不会判成写。
+- `let x: int = 1`、`const x: int = 1`，以及 Python 的 `x: int = 1`，冒号后面的类型名（`int`）不会判成写。带生命周期的写法 `let x: &'a str = "hi"` 能认出 `x` 是写。
+- 没有 `let` / `const` / `public` 这类声明前缀时，`label: x = 1` 里的 `label`，以及 `x: int = 1` 里的 `int`，仍可能被判成写。这是标签和类型注解在同一行里分不清导致的。
 
 规则可以通过 `searchhighlight.patterns` 配置，支持按语言分成多个分组（例如 `common`、`go`、`python`），检测时会把所有分组的内容合并使用：
 
@@ -53,14 +68,14 @@ SearchHighlight 是一个用于搜索代码中变量、函数等标识符的 VSC
   },
   "go": {
     "operators": [":=", "<-"],
-    "functions": ["append", "delete", "close", "copy"]
+    "functions": ["append", "delete", "copy"]
   }
 }
 ```
 
 - `operators`：赋值运算符
 - `methods`：会修改自身的成员方法名，大小写不敏感，并且支持 CamelCase 变体（配置 `set` 即可识别 `setValue`、`Set`）
-- `functions`：会修改第一个实参的函数名，例如 `append(xs, v)` 里的 `xs`
+- `functions`：会修改第一个实参的自由函数名。`append(xs, v)` 里写的是 `xs`；`strcpy(p->date, src)` 里写的是 `date`，不是 `p`。成员调用不走这条规则。`close(fd)` 不会把 `fd` 判成写，因为 `close` 并不修改这个变量；`gets` / `fgets` 会往缓冲区里写，所以仍然算写
 - `excludeOperators`：不能当成赋值的运算符（`==`、`=>` 这类比较运算符始终会被排除）
 
 修改配置后可以执行命令 `Reload Write Operation Patterns` 立即生效。
@@ -77,7 +92,7 @@ SearchHighlight 是一个用于搜索代码中变量、函数等标识符的 VSC
 ### 搜索配置
 
 - `searchhighlight.caseSensitive`: 是否区分大小写（默认：true）
-- `searchhighlight.matchWholeWord`: 是否全词匹配（默认：true）
+- `searchhighlight.matchWholeWord`: 是否全词匹配（默认：true）。编辑器里的高亮和 ripgrep 一样按 Unicode 分词，中文标识符也能完整匹配
 - `searchhighlight.excludePatterns`: 要排除的目录列表
 - `searchhighlight.respectGitIgnore`: 是否遵循 `.gitignore` 等忽略规则（默认：false，即搜索时忽略这些规则）
 - `searchhighlight.debug`: 是否在输出面板打印调试日志（默认：false）

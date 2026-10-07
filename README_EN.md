@@ -28,17 +28,31 @@ SearchHighlight is a VSCode extension for searching code identifiers such as var
 
 ### Write Operation Detection Rules
 
-An identifier is treated as a write when the text after it on the same line matches one of the following:
+An identifier is treated as a write only when that name itself is the thing being modified. A prefix used to reach it is a read. The text after the match on the same line is checked against:
 
-| Form | Examples |
-|------|----------|
-| Assignment / increment operators | `x = 1`, `x += 1`, `x++`, `x := 1`, `ch <- v` |
-| Assignment through index, member or type annotation | `x[0] = 1`, `obj.field = 1`, `p->field = 1`, `x: int = 1` |
-| Multiple assignment and destructuring | `a, b = f()`, `let {a} = obj`, `let [a] = arr` |
-| Mutating member methods | `xs.append(v)`, `xs.Add(v)`, `list.push_back(v)`, `obj.setValue(v)` |
-| Functions that mutate their first argument | `append(xs, v)`, `memcpy(dst, src)` |
+| Form | What counts as the write | Examples |
+|------|--------------------------|----------|
+| Assignment / increment | The name on the left of the operator | `x = 1`, `x += 1`, `x++`, `++x`, `x := 1`, `ch <- v` |
+| Index or type annotation | That same name | `x[0] = 1`, `x: int = 1`, `int *x = 1` |
+| Member assignment | The final member. The object or pointer is a read | `obj.field = 1` writes `field`; `++p->field` writes `field`. `*p = 1` does not write `p` |
+| Multiple assignment and destructuring | Each assigned name, not a rename key | `a, b = f()`, `let {a} = obj`. In `{a: b} = obj`, `b` is the write |
+| Loop variable, out/ref, alias | The bound or written-back name | `for x in xs`, `for (x of xs)`, `for (auto x : xs)`, `out x`, `import a as b` |
+| Mutating member method | The object immediately before `.` or `->`, and only when it is a call | `xs.append(v)`, `p->insert(v)`. `obj.set = 1` writes `set` |
+| Free function that mutates its first argument | The last name of the first argument | `memcpy(dst, src)`; `strcpy(p->date, src)` writes `date`, not `p` |
 
-Everything else is treated as a read. Identifiers inside string literals and comments are never treated as writes, and comparison operators such as `==`, `===`, `!=`, `=>` are not mistaken for assignment.
+Everything else is treated as a read. Identifiers inside string literals, line comments, and same-line block comments (`/* ... */`) are never treated as writes. Line comments follow the language: `//` in C-family languages, `#` in Python and similar languages, and `--` in SQL, Lua, and Haskell. Comparison operators such as `==`, `===`, `!=`, and `=>` are not mistaken for assignment.
+
+Searching for `pOrder`, `pOrder = &list[i]` and `++pOrder` are writes. `pOrder->status = Open`, `pOrder->days++`, `*pOrder = 1`, and `if (pOrder != nullptr)` are reads. `int *pOrder = 0` is still a write. On `pOrder->huicheprice = max(pOrder->huicheprice, high)` both occurrences of `pOrder` are reads; the name being written is `huicheprice`.
+
+A line still contributes one result. If the searched name is both read and written on that line, the highlight is placed on the write, as in `if (x > 0) x = 1`.
+
+A member call such as `list.append(item)` marks `list` as the mutated receiver. `item` is not treated as a write just because `append` is also listed under `functions`. `a.b.append(v)` marks `b`, not `a`. The same applies to `p->insert(pos, value)` and `obj?.erase(it)`: only the object next to the method counts.
+
+A few forms look like assignment but are only guessed from the same line:
+
+- `FOO` in `case FOO:` is not a write.
+- In `let x: int = 1`, `const x: int = 1`, and Python `x: int = 1`, the type name after the colon is not a write. `let x: &'a str = "hi"` recognizes `x` as a write.
+- Without a declaration keyword such as `let`, `const`, or `public`, `label` in `label: x = 1` and `int` in `x: int = 1` may still be marked as writes. A label and a type annotation cannot be told apart on one line.
 
 Rules are configured through `searchhighlight.patterns`. Multiple groups (for example `common`, `go`, `python`) are merged together:
 
@@ -51,14 +65,14 @@ Rules are configured through `searchhighlight.patterns`. Multiple groups (for ex
   },
   "go": {
     "operators": [":=", "<-"],
-    "functions": ["append", "delete", "close", "copy"]
+    "functions": ["append", "delete", "copy"]
   }
 }
 ```
 
 - `operators`: assignment operators
 - `methods`: mutating member method names, matched case-insensitively and with CamelCase variants (configuring `set` also matches `setValue` and `Set`)
-- `functions`: functions that mutate their first argument, e.g. `xs` in `append(xs, v)`
+- `functions`: free functions that mutate their first argument. `append(xs, v)` writes `xs`; `strcpy(p->date, src)` writes `date`, not `p`. Member calls do not use this rule. `close(fd)` does not mark `fd` as a write, because `close` does not modify the variable. `gets` / `fgets` write into the buffer, so they still count
 - `excludeOperators`: operators that must not be treated as assignment (comparison operators such as `==` and `=>` are always excluded)
 
 Run the `Reload Write Operation Patterns` command to apply changes immediately.
@@ -68,7 +82,7 @@ Run the `Reload Write Operation Patterns` command to apply changes immediately.
 ### Search Configuration
 
 - `searchhighlight.caseSensitive`: Enable case-sensitive search (default: true)
-- `searchhighlight.matchWholeWord`: Enable whole word match (default: true)
+- `searchhighlight.matchWholeWord`: Enable whole word match (default: true). Editor highlights use the same Unicode word boundaries as ripgrep, so non-ASCII identifiers such as Chinese names match as a whole word
 - `searchhighlight.excludePatterns`: Directory patterns to exclude
 - `searchhighlight.respectGitIgnore`: Respect `.gitignore` and similar ignore files (default: false, i.e. search everything)
 - `searchhighlight.debug`: Print debug logs to the output panel (default: false)
