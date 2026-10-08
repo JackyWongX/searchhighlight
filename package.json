@@ -2,7 +2,7 @@
   "name": "searchhighlight",
   "displayName": "SearchHighlight",
   "description": "SearchHighlight主要功能是搜索代码变量和函数以及其他字符并根据搜索到的字符串所在行中的读写属性来显示不同的颜色",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "engines": {
     "vscode": "^1.80.0"
   },
@@ -317,6 +317,11 @@
           "type": "boolean",
           "default": false,
           "description": "是否遵循 .gitignore、.ignore 等忽略规则。关闭时会搜索所有文件（仍受排除目录和后缀配置约束）。"
+        },
+        "searchhighlight.ripgrepPath": {
+          "type": "string",
+          "default": "",
+          "description": "ripgrep 可执行文件的绝对路径。留空时先找 VS Code 安装目录里的 ripgrep，找不到再找 Cursor、Trae 等编辑器，最后再找 PATH。这些地方都没有时会提示设置此项。"
         },
         "searchhighlight.debug": {
           "type": "boolean",

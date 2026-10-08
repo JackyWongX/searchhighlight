@@ -6,7 +6,7 @@ SearchHighlight is a VSCode extension for searching code identifiers such as var
 
 ## Features
 
-- Quick search for code identifiers in workspace
+- Quick search for code identifiers in workspace. The language server symbol index is used first; if it is unavailable or has no match, search falls back to ripgrep
 - Smart detection of read/write operations
 - Customizable highlighting colors
 - Rich configuration for write operation detection
@@ -85,6 +85,7 @@ Run the `Reload Write Operation Patterns` command to apply changes immediately.
 - `searchhighlight.matchWholeWord`: Enable whole word match (default: true). Editor highlights use the same Unicode word boundaries as ripgrep, so non-ASCII identifiers such as Chinese names match as a whole word
 - `searchhighlight.excludePatterns`: Directory patterns to exclude
 - `searchhighlight.respectGitIgnore`: Respect `.gitignore` and similar ignore files (default: false, i.e. search everything)
+- `searchhighlight.ripgrepPath`: Absolute path to ripgrep (default: empty). When empty, the extension looks in the VS Code install directory, then common VS Code forks such as Cursor and Trae, then PATH. If none of those have ripgrep, search asks you to set this.
 - `searchhighlight.debug`: Print debug logs to the output panel (default: false)
 - `searchhighlight.excludeFileExtensions`: File extensions to exclude, defaults include:
   - Generated code files (.pb.h, .pb.cc, .generated.h, .generated.cpp, etc.)
@@ -117,8 +118,15 @@ Run the `Reload Write Operation Patterns` command to apply changes immediately.
 - PHP (.php)
 
 ## Note
-- This extension uses VSCode's built-in rg.exe for fast file searching, even in large projects
-- If search is slow, please check rg.exe path or add it to system PATH and try again
+- With whole-word match on, search asks the language server symbol index first. When that index knows the name, its references become the results, still colored as reads or writes
+- Search switches to ripgrep when the symbol index is missing, the query times out, the name is not in the index, references cannot be retrieved, or more than 30 symbols share that name
+- Turning whole-word match off uses ripgrep directly. The symbol index only knows complete names, not arbitrary text fragments
+- Symbol results are the references of one symbol as the language server sees it. A different local variable with the same spelling may be absent
+- ripgrep is only required for that fallback. A successful symbol-index search works even when rg is not installed
+- The fallback uses the rg binary in the VS Code install directory, so text search stays fast even in large projects
+- If that directory has no rg, it also looks in common VS Code forks such as Cursor, Trae, Trae CN, Windsurf, and VSCodium, then on PATH
+- If rg is still not found, a prompt asks you to set `searchhighlight.ripgrepPath` to the full path of the rg program
+- If rg is found but text search is still slow, check the exclude settings, or add rg to PATH and try again
 
 ## Contributing
 

@@ -149,6 +149,23 @@ function evictOldest<K, V>(cache: Map<K, V>, maxSize: number): void {
     }
 }
 
+// 语言服务可能一直不返回。到时就放弃这次查询，改走别的搜索方式
+function withTimeout<T>(promise: PromiseLike<T>, ms: number): Promise<{ value?: T; timedOut: boolean; error?: unknown }> {
+    return new Promise(resolve => {
+        const timer = setTimeout(() => resolve({ timedOut: true }), ms);
+        Promise.resolve(promise).then(
+            value => {
+                clearTimeout(timer);
+                resolve({ value, timedOut: false });
+            },
+            error => {
+                clearTimeout(timer);
+                resolve({ timedOut: false, error });
+            }
+        );
+    });
+}
+
 // 符号解析结果
 interface SymbolRangesResult {
     ranges: SymbolRange[];
@@ -373,6 +390,8 @@ class RipGrepSearch {
     private rgPath: string;
     // 是否已经提示过 ripgrep 缺失，避免重复弹窗
     private static rgMissingReported = false;
+    // VS Code 目录、Cursor / Trae 等目录和 PATH 都找不到时，搜索前弹给用户的说明
+    private static missingHint = '';
     // 文件编码缓存，避免同一个文件的每一行都做一次编码检测（跨搜索复用，按修改时间失效）
     private static readonly encodingCache = new Map<string, { mtimeMs: number | undefined; encoding: string }>();
     // 编码缓存的文件数上限
@@ -391,9 +410,15 @@ class RipGrepSearch {
     private static readonly RESULT_FLUSH_INTERVAL = 120;
     // 无论配置如何都必须排除的目录，避免 --no-ignore 时遍历版本库元数据
     private static readonly MANDATORY_EXCLUDE_DIRS = ['.git', '.hg', '.svn'];
+    // 符号数据库查询超时：语言服务没就绪时不要一直卡住，超时后改用 ripgrep
+    private static readonly SYMBOL_QUERY_TIMEOUT_MS = 4000;
+    // 单个符号的引用查询超时
+    private static readonly REFERENCE_QUERY_TIMEOUT_MS = 2500;
+    // 同名符号太多时，逐个展开引用又慢又不完整，改用全文搜索
+    private static readonly MAX_SYMBOLS_TO_EXPAND = 30;
     constructor() {
         this.rgPath = RipGrepSearch.resolveRipGrepPath();
-        debugLog(`RipGrep 路径: ${this.rgPath}`);
+        debugLog(this.rgPath ? `RipGrep 路径: ${this.rgPath}` : `RipGrep 未找到。${RipGrepSearch.missingHint}`);
     }
 
     // 每次搜索重新检测文件编码
@@ -401,34 +426,185 @@ class RipGrepSearch {
         RipGrepSearch.encodingCache.clear();
     }
 
-    // 依次尝试 VS Code 自带的 ripgrep、常见安装目录、PATH 环境变量中的 rg
-    private static resolveRipGrepPath(): string {
-        const exeName = process.platform === 'win32' ? 'rg.exe' : 'rg';
+    public refreshRipGrepPath(): void {
+        // 先允许再次提示，再重新查找。否则这次查找弹出的提示会被马上清掉
+        RipGrepSearch.rgMissingReported = false;
+        this.rgPath = RipGrepSearch.resolveRipGrepPath();
+        debugLog(this.rgPath ? `RipGrep 路径已更新: ${this.rgPath}` : `RipGrep 未找到。${RipGrepSearch.missingHint}`);
+    }
 
-        // 1. VS Code 自带的 ripgrep：appRoot 在桌面版和远程服务端都指向 VS Code 的安装目录
-        const appRoots: string[] = [];
-        if (vscode.env.appRoot) {
-            appRoots.push(vscode.env.appRoot);
+    // 依次尝试：用户指定路径、当前编辑器和 VS Code 安装目录、Cursor / Trae 等二次开发编辑器、PATH。
+    // 这些地方都没有时只记下说明，等用户真正搜索时再提示去设置路径。
+    private static resolveRipGrepPath(): string {
+        RipGrepSearch.missingHint = '';
+        const exeName = process.platform === 'win32' ? 'rg.exe' : 'rg';
+        const configuredPath = vscode.workspace.getConfiguration('searchhighlight').get<string>('ripgrepPath', '').trim();
+        let invalidConfiguredPath = '';
+        if (configuredPath) {
+            const resolved = path.resolve(configuredPath);
+            if (RipGrepSearch.isExistingFile(resolved)) {
+                return resolved;
+            }
+            invalidConfiguredPath = resolved;
+            debugLog(`配置的 ripgrep 路径不存在: ${resolved}`);
         }
 
-        // 2. 常见的 VS Code 安装目录，作为 appRoot 不可用时的兜底
-        const localAppData = process.env.LOCALAPPDATA || '';
-        const userProfile = process.env.USERPROFILE || process.env.HOME || '';
-        appRoots.push(
-            'C:\\Program Files\\Microsoft VS Code\\resources\\app',
-            'C:\\Program Files (x86)\\Microsoft VS Code\\resources\\app',
-            localAppData ? path.join(localAppData, 'Programs', 'Microsoft VS Code', 'resources', 'app') : '',
-            localAppData ? path.join(localAppData, 'Programs', 'Microsoft VS Code Insiders', 'resources', 'app') : '',
-            userProfile ? path.join(userProfile, 'AppData', 'Local', 'Programs', 'Microsoft VS Code', 'resources', 'app') : '',
-            '/Applications/Visual Studio Code.app/Contents/Resources/app',
-            '/Applications/Visual Studio Code - Insiders.app/Contents/Resources/app',
-            '/usr/share/code/resources/app',
-            '/usr/share/code-insiders/resources/app',
-            '/usr/lib/code/resources/app',
-            '/snap/code/current/usr/share/code/resources/app'
-        );
+        // 先找本机 VS Code、VS Code Insiders，以及当前编辑器自己的安装目录
+        const vsCodeRoots = RipGrepSearch.uniqueRoots([
+            ...RipGrepSearch.getVsCodeInstallAppRoots(),
+            ...RipGrepSearch.getEditorAppRoots()
+        ]);
+        const fromVsCode = RipGrepSearch.findInAppRoots(vsCodeRoots, exeName);
+        if (fromVsCode) {
+            return fromVsCode;
+        }
 
-        for (const appRoot of appRoots.filter(Boolean)) {
+        // VS Code 目录里没有，再找 Cursor、Trae 等基于 VS Code 二次开发的编辑器
+        const vsCodeRootSet = new Set(vsCodeRoots);
+        const forkRoots = RipGrepSearch.getForkInstallAppRoots().filter(root => !vsCodeRootSet.has(root));
+        const fromFork = RipGrepSearch.findInAppRoots(forkRoots, exeName);
+        if (fromFork) {
+            debugLog(`VS Code 安装目录中未找到 ripgrep，改用其他编辑器目录: ${fromFork}`);
+            return fromFork;
+        }
+
+        // 最后检查 PATH，支持用户自行安装的 ripgrep
+        const onPath = RipGrepSearch.findRipGrepOnPath();
+        if (onPath) {
+            debugLog(`安装目录中未找到 ripgrep，改用 PATH: ${onPath}`);
+            return onPath;
+        }
+
+        RipGrepSearch.missingHint = invalidConfiguredPath
+            ? `填写的 ripgrep 路径不存在：${invalidConfiguredPath}。VS Code、Cursor、Trae 这些目录里也没有找到 rg，请重新设置路径。`
+            : '没有在 VS Code 安装目录里找到 ripgrep（rg），在 Cursor、Trae 等编辑器目录和 PATH 里也没有找到。请设置 rg 的路径后再搜索。';
+        debugLog(RipGrepSearch.missingHint);
+        return '';
+    }
+
+    // 编辑器目录和其他目录都找不到时，提示用户去设置里填写 rg 路径
+    private static promptToSetRipGrepPath(): void {
+        if (RipGrepSearch.rgMissingReported) {
+            return;
+        }
+        RipGrepSearch.rgMissingReported = true;
+        const message = RipGrepSearch.missingHint
+            || '没有在 VS Code 安装目录里找到 ripgrep（rg），在 Cursor、Trae 等编辑器目录里也没有找到。请设置 rg 的路径后再搜索。';
+        void vscode.window.showErrorMessage(message, '设置 ripgrep 路径').then(action => {
+            if (action) {
+                void vscode.commands.executeCommand('workbench.action.openSettings', 'searchhighlight.ripgrepPath');
+            }
+        });
+    }
+
+    private static isExistingFile(candidate: string): boolean {
+        try {
+            return !!candidate && fs.statSync(candidate).isFile();
+        } catch {
+            return false;
+        }
+    }
+
+    private static addAppRoot(appRoots: Set<string>, candidate: string | undefined): void {
+        if (candidate) {
+            appRoots.add(path.resolve(candidate));
+        }
+    }
+
+    // 当前正在使用的编辑器安装目录
+    private static getEditorAppRoots(): string[] {
+        const appRoots = new Set<string>();
+        RipGrepSearch.addAppRoot(appRoots, vscode.env.appRoot);
+        RipGrepSearch.addAppRoot(appRoots, process.env.VSCODE_PORTABLE);
+
+        // 某些编辑器的 appRoot 可能不可用，从当前程序向上找标准的 resources/app 布局
+        let executableDir = path.dirname(process.execPath);
+        for (let depth = 0; depth < 6; depth++) {
+            RipGrepSearch.addAppRoot(appRoots, executableDir);
+            RipGrepSearch.addAppRoot(appRoots, path.join(executableDir, 'resources', 'app'));
+            const parent = path.dirname(executableDir);
+            if (parent === executableDir) {
+                break;
+            }
+            executableDir = parent;
+        }
+        return [...appRoots];
+    }
+
+    private static uniqueRoots(candidates: string[]): string[] {
+        return [...new Set(candidates)];
+    }
+
+    // 本机 VS Code、VS Code Insiders 的默认安装目录
+    private static getVsCodeInstallAppRoots(): string[] {
+        const roots = RipGrepSearch.getNamedProductAppRoots(
+            ['Microsoft VS Code', 'Microsoft VS Code Insiders'],
+            ['Visual Studio Code', 'Visual Studio Code - Insiders'],
+            ['code', 'code-insiders', 'code-oss', 'visual-studio-code']
+        );
+        if (process.platform !== 'win32' && process.platform !== 'darwin') {
+            roots.push('/snap/code/current/usr/share/code/resources/app');
+        }
+        return RipGrepSearch.uniqueRoots(roots);
+    }
+
+    // VS Code 目录里没有 rg 时，再看这些基于 VS Code 二次开发的编辑器
+    private static readonly FORK_PRODUCT_NAMES = [
+        'cursor', 'Cursor',
+        'Trae', 'Trae CN',
+        'Windsurf',
+        'VSCodium',
+        'Kiro',
+        'CodeBuddy',
+        'Qoder'
+    ];
+
+    private static getForkInstallAppRoots(): string[] {
+        const macNames = RipGrepSearch.FORK_PRODUCT_NAMES.filter(name => name !== 'cursor');
+        const linuxNames = [
+            ...RipGrepSearch.FORK_PRODUCT_NAMES,
+            'trae', 'windsurf', 'codium', 'vscodium', 'kiro', 'codebuddy', 'qoder'
+        ];
+        return RipGrepSearch.getNamedProductAppRoots(
+            RipGrepSearch.FORK_PRODUCT_NAMES,
+            macNames,
+            linuxNames
+        );
+    }
+
+    // 按软件名字拼出 resources/app，不扫描安装目录下的全部程序
+    private static getNamedProductAppRoots(windowsNames: string[], macAppNames: string[], linuxNames: string[]): string[] {
+        const appRoots = new Set<string>();
+        if (process.platform === 'win32') {
+            const bases = [
+                process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'Programs') : '',
+                process.env.ProgramFiles || '',
+                process.env['ProgramFiles(x86)'] || ''
+            ];
+            for (const base of bases.filter(Boolean)) {
+                for (const name of windowsNames) {
+                    RipGrepSearch.addAppRoot(appRoots, path.join(base, name, 'resources', 'app'));
+                }
+            }
+        } else if (process.platform === 'darwin') {
+            const bases = ['/Applications', path.join(process.env.HOME || '', 'Applications')];
+            for (const base of bases) {
+                for (const name of macAppNames) {
+                    RipGrepSearch.addAppRoot(appRoots, path.join(base, `${name}.app`, 'Contents', 'Resources', 'app'));
+                }
+            }
+        } else {
+            for (const base of ['/usr/share', '/usr/lib', '/opt']) {
+                for (const name of linuxNames) {
+                    RipGrepSearch.addAppRoot(appRoots, path.join(base, name, 'resources', 'app'));
+                }
+            }
+        }
+        return [...appRoots];
+    }
+
+    private static findInAppRoots(appRoots: string[], exeName: string): string | undefined {
+        for (const appRoot of appRoots) {
             for (const relativeDir of RipGrepSearch.RIPGREP_BIN_DIRS) {
                 const found = RipGrepSearch.findRipGrepInDir(path.join(appRoot, relativeDir), exeName);
                 if (found) {
@@ -436,11 +612,7 @@ class RipGrepSearch {
                 }
             }
         }
-
-        // 3. PATH 环境变量中的 rg
-        const onPath = RipGrepSearch.findRipGrepOnPath();
-        // 找不到时仍返回 rg，由 spawn 失败后的提示告知用户具体原因
-        return onPath || 'rg';
+        return undefined;
     }
 
     // VS Code 不同版本内置 ripgrep 的存放位置
@@ -455,7 +627,7 @@ class RipGrepSearch {
     // 可执行文件可能直接放在 bin 目录下，也可能放在 bin/<平台>-<架构>/ 子目录下
     private static findRipGrepInDir(binDir: string, exeName: string): string | undefined {
         const direct = path.join(binDir, exeName);
-        if (fs.existsSync(direct)) {
+        if (RipGrepSearch.isExistingFile(direct)) {
             return direct;
         }
 
@@ -465,7 +637,7 @@ class RipGrepSearch {
                     continue;
                 }
                 const candidate = path.join(binDir, entry.name, exeName);
-                if (fs.existsSync(candidate)) {
+                if (RipGrepSearch.isExistingFile(candidate)) {
                     return candidate;
                 }
             }
@@ -483,7 +655,7 @@ class RipGrepSearch {
                 .split(/\r?\n/)
                 .map(line => line.trim())
                 .filter(Boolean)[0];
-            if (result.status === 0 && found) {
+            if (result.status === 0 && found && RipGrepSearch.isExistingFile(found)) {
                 return found;
             }
         } catch (error) {
@@ -824,13 +996,7 @@ class RipGrepSearch {
             rg.on('error', (err) => {
                 // rg 不存在时给出明确的原因，避免只显示“搜索过程中发生错误”
                 if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-                    if (!RipGrepSearch.rgMissingReported) {
-                        RipGrepSearch.rgMissingReported = true;
-                        vscode.window.showErrorMessage(
-                            `未找到 ripgrep（rg，当前使用: ${this.rgPath}），无法执行搜索。` +
-                            '请安装 ripgrep 并加入 PATH 环境变量后重试。'
-                        );
-                    }
+                    RipGrepSearch.promptToSetRipGrepPath();
                     finish();
                     return;
                 }
@@ -862,6 +1028,304 @@ class RipGrepSearch {
         });
     }
 
+    // 符号名是否就是这次要搜的名字。全词匹配比完整名字，否则比是否包含这段文字
+    private symbolNameMatches(symbolName: string, searchText: string, caseSensitive: boolean, matchWholeWord: boolean): boolean {
+        const simplified = simplifySymbolName(symbolName) || symbolName.trim();
+        const candidates = simplified === symbolName ? [symbolName] : [simplified, symbolName];
+        const query = caseSensitive ? searchText : searchText.toLowerCase();
+        return candidates.some(candidate => {
+            const name = caseSensitive ? candidate : candidate.toLowerCase();
+            return matchWholeWord ? name === query : name.includes(query);
+        });
+    }
+
+    // 排除目录、排除后缀，以及工作区以外的文件。规则和 ripgrep 那一路保持一致
+    private isExcludedFile(filePath: string, excludeDirs: string[], excludeExts: string[]): boolean {
+        if (!this.isInsideWorkspace(filePath)) {
+            return true;
+        }
+        const parts = filePath.replace(/\\/g, '/').split('/');
+        const fileName = (parts[parts.length - 1] || '').toLowerCase();
+        if (excludeExts.some(ext => {
+            const normalized = ext.trim().toLowerCase();
+            return normalized.length > 0 && fileName.endsWith(normalized);
+        })) {
+            return true;
+        }
+        const dirNames = [...RipGrepSearch.MANDATORY_EXCLUDE_DIRS, ...excludeDirs];
+        return dirNames.some(pattern => this.pathMatchesExclude(parts, pattern));
+    }
+
+    private isInsideWorkspace(filePath: string): boolean {
+        const folders = vscode.workspace.workspaceFolders;
+        if (!folders || folders.length === 0) {
+            return false;
+        }
+        const key = pathKey(filePath);
+        return folders.some(folder => {
+            const root = pathKey(folder.uri.fsPath).replace(/\/+$/, '');
+            return key === root || key.startsWith(`${root}/`);
+        });
+    }
+
+    // 配置里的排除项是目录名或 *.egg-info 这种写法，只拿路径里的目录段来比
+    private pathMatchesExclude(parts: string[], pattern: string): boolean {
+        if (!pattern) {
+            return false;
+        }
+        const normalized = pattern.replace(/\\/g, '/').replace(/^\*\*\//, '').replace(/\/\*\*$/, '').replace(/\/$/, '');
+        if (!normalized || normalized === '*' || normalized === '**') {
+            return false;
+        }
+        const dirParts = parts.slice(0, -1);
+        if (normalized.startsWith('*')) {
+            const suffix = normalized.slice(1).toLowerCase();
+            return suffix.length > 0 && dirParts.some(part => part.toLowerCase().endsWith(suffix));
+        }
+        const name = normalized.toLowerCase();
+        return dirParts.some(part => part.toLowerCase() === name);
+    }
+
+    // 用语言服务器的符号数据库查找这个名字的引用。
+    // 返回 undefined 表示符号数据库不可用或答不上这次查询，调用方改用 ripgrep。
+    private async searchSymbolDatabase(
+        searchText: string,
+        caseSensitive: boolean,
+        matchWholeWord: boolean,
+        excludeDirs: string[],
+        excludeExts: string[],
+        token?: vscode.CancellationToken
+    ): Promise<SearchResult[] | undefined> {
+        if (token?.isCancellationRequested) {
+            return undefined;
+        }
+
+        const queried = await withTimeout(
+            vscode.commands.executeCommand<vscode.SymbolInformation[]>(
+                'vscode.executeWorkspaceSymbolProvider',
+                searchText
+            ),
+            RipGrepSearch.SYMBOL_QUERY_TIMEOUT_MS
+        );
+        if (token?.isCancellationRequested) {
+            return undefined;
+        }
+        if (queried.timedOut) {
+            debugLog('符号数据库查询超时，改用 ripgrep');
+            return undefined;
+        }
+        if (queried.error) {
+            debugLog('符号数据库查询失败，改用 ripgrep', queried.error);
+            return undefined;
+        }
+        // 没有注册符号提供者时，这个命令返回空数组，和“库里没有这个名字”分不开，两种都改用全文搜索
+        const symbols = queried.value;
+        if (!symbols || symbols.length === 0) {
+            debugLog('符号数据库没有返回符号，改用 ripgrep');
+            return undefined;
+        }
+
+        const seenSymbols = new Set<string>();
+        const matched = symbols.filter(symbol => {
+            if (!symbol?.name || !symbol.location || symbol.location.uri.scheme !== 'file') {
+                return false;
+            }
+            if (!this.symbolNameMatches(symbol.name, searchText, caseSensitive, matchWholeWord)) {
+                return false;
+            }
+            if (this.isExcludedFile(symbol.location.uri.fsPath, excludeDirs, excludeExts)) {
+                return false;
+            }
+            const loc = symbol.location;
+            const key = `${pathKey(loc.uri.fsPath)}:${loc.range.start.line}:${loc.range.start.character}:${symbol.name}`;
+            if (seenSymbols.has(key)) {
+                return false;
+            }
+            seenSymbols.add(key);
+            return true;
+        });
+
+        if (matched.length === 0) {
+            debugLog(`符号数据库已响应，但没有与 "${searchText}" 匹配的符号，改用 ripgrep`);
+            return undefined;
+        }
+        if (matched.length > RipGrepSearch.MAX_SYMBOLS_TO_EXPAND) {
+            debugLog(`匹配的符号有 ${matched.length} 个，超过 ${RipGrepSearch.MAX_SYMBOLS_TO_EXPAND} 个，改用 ripgrep`);
+            return undefined;
+        }
+
+        debugLog(`符号数据库命中 ${matched.length} 个符号，开始查找引用`);
+        const locations = await this.collectReferenceLocations(matched, excludeDirs, excludeExts, token);
+        if (!locations || token?.isCancellationRequested) {
+            return undefined;
+        }
+
+        const results = await this.locationsToResults(locations, searchText, caseSensitive, matchWholeWord, token);
+        if (results.length === 0) {
+            debugLog('符号引用没有可显示的结果，改用 ripgrep');
+            return undefined;
+        }
+        debugLog(`符号数据库提供 ${results.length} 条搜索结果`);
+        return results;
+    }
+
+    // 向引用提供者要每个符号的出现位置。一个都问不到时返回 undefined，改用 ripgrep
+    private async collectReferenceLocations(
+        symbols: vscode.SymbolInformation[],
+        excludeDirs: string[],
+        excludeExts: string[],
+        token?: vscode.CancellationToken
+    ): Promise<vscode.Location[] | undefined> {
+        const locations: vscode.Location[] = [];
+        const seen = new Set<string>();
+        let sawReferences = false;
+
+        const add = (location: vscode.Location): void => {
+            if (!location?.uri || location.uri.scheme !== 'file') {
+                return;
+            }
+            const filePath = location.uri.fsPath;
+            if (this.isExcludedFile(filePath, excludeDirs, excludeExts)) {
+                return;
+            }
+            const key = `${pathKey(filePath)}:${location.range.start.line}:${location.range.start.character}`;
+            if (seen.has(key)) {
+                return;
+            }
+            seen.add(key);
+            locations.push(location);
+        };
+
+        const concurrency = Math.min(4, symbols.length);
+        let nextIndex = 0;
+        const workers = Array.from({ length: concurrency }, async () => {
+            while (nextIndex < symbols.length && !token?.isCancellationRequested) {
+                const symbol = symbols[nextIndex++];
+                const outcome = await withTimeout(
+                    vscode.commands.executeCommand<vscode.Location[]>(
+                        'vscode.executeReferenceProvider',
+                        symbol.location.uri,
+                        symbol.location.range.start
+                    ),
+                    RipGrepSearch.REFERENCE_QUERY_TIMEOUT_MS
+                );
+                if (outcome.timedOut || outcome.error || !outcome.value || outcome.value.length === 0) {
+                    if (outcome.error) {
+                        debugLog(`查找符号引用失败: ${symbol.name}`, outcome.error);
+                    }
+                    continue;
+                }
+                sawReferences = true;
+                for (const location of outcome.value) {
+                    add(location);
+                }
+            }
+        });
+        await Promise.all(workers);
+
+        if (token?.isCancellationRequested) {
+            return undefined;
+        }
+        if (!sawReferences) {
+            debugLog('符号数据库有这个名字，但没有拿到引用，改用 ripgrep');
+            return undefined;
+        }
+        return locations;
+    }
+
+    // 把符号引用转成和 ripgrep 相同的搜索结果：读出那一行，再判断读写
+    private async locationsToResults(
+        locations: vscode.Location[],
+        searchText: string,
+        caseSensitive: boolean,
+        matchWholeWord: boolean,
+        token?: vscode.CancellationToken
+    ): Promise<SearchResult[]> {
+        const byFile = new Map<string, { uri: vscode.Uri; lines: Map<number, vscode.Range[]> }>();
+        for (const location of locations) {
+            const filePath = location.uri.fsPath;
+            const key = pathKey(filePath);
+            let entry = byFile.get(key);
+            if (!entry) {
+                entry = { uri: location.uri, lines: new Map() };
+                byFile.set(key, entry);
+            }
+            const line = location.range.start.line;
+            const ranges = entry.lines.get(line) || [];
+            ranges.push(location.range);
+            entry.lines.set(line, ranges);
+        }
+
+        const results: SearchResult[] = [];
+        const regex = RipGrepSearch.buildSearchRegex(searchText, caseSensitive, matchWholeWord);
+        for (const entry of byFile.values()) {
+            if (token?.isCancellationRequested) {
+                break;
+            }
+            let document: vscode.TextDocument;
+            try {
+                document = await vscode.workspace.openTextDocument(entry.uri);
+            } catch (error) {
+                debugLog(`读取符号所在文件失败: ${entry.uri.fsPath}`, error);
+                continue;
+            }
+            const filePath = document.uri.fsPath;
+            for (const [line, ranges] of entry.lines) {
+                if (line < 0 || line >= document.lineCount) {
+                    continue;
+                }
+                const content = document.lineAt(line).text;
+                if (RipGrepSearch.isCommentLine(filePath, content.trimStart())) {
+                    continue;
+                }
+                const matchRanges = this.matchRangesOnLine(content, regex, ranges);
+                const chosen = chooseMatchRange(writeDetector, content, matchRanges, filePath);
+                if (!chosen) {
+                    continue;
+                }
+                const display = RipGrepSearch.buildDisplayContent(content, chosen.start, chosen.end);
+                results.push({
+                    file: filePath,
+                    fileName: path.basename(filePath),
+                    line,
+                    lineContent: display.content,
+                    isWrite: chosen.isWrite,
+                    matchStart: display.matchStart,
+                    matchEnd: display.matchEnd
+                });
+            }
+        }
+        return results;
+    }
+
+    // 优先用这一行里的文字匹配。对不上时再用符号自己标出的范围
+    private matchRangesOnLine(content: string, regex: RegExp, symbolRanges: vscode.Range[]): { start: number; end: number }[] {
+        const ranges: { start: number; end: number }[] = [];
+        regex.lastIndex = 0;
+        let match: RegExpExecArray | null;
+        while ((match = regex.exec(content)) !== null) {
+            if (match[0].length === 0) {
+                regex.lastIndex++;
+                continue;
+            }
+            ranges.push({ start: match.index, end: match.index + match[0].length });
+        }
+        if (ranges.length > 0) {
+            return ranges;
+        }
+        for (const range of symbolRanges) {
+            if (range.end.line !== range.start.line) {
+                continue;
+            }
+            const start = Math.max(0, Math.min(range.start.character, content.length));
+            const end = Math.max(start, Math.min(range.end.character, content.length));
+            if (end > start) {
+                ranges.push({ start, end });
+            }
+        }
+        return ranges;
+    }
+
     public async search(searchText: string, startFilePath?: string, onResults?: (results: SearchResult[], isFinal: boolean) => void, progress?: { report: (msg: { message: string }) => void }, token?: vscode.CancellationToken): Promise<SearchResult[]> {
         const workspaceFolders = vscode.workspace.workspaceFolders;
 
@@ -879,6 +1343,42 @@ class RipGrepSearch {
         const respectGitIgnore = config.get<boolean>('respectGitIgnore', false);
         const excludeDirs = config.get<string[]>('excludePatterns') || [];
         const excludeExts = config.get<string[]>('excludeFileExtensions') || [];
+
+        const activeFilePath = vscode.window.activeTextEditor?.document.uri.fsPath;
+        const startDir = startFilePath ? path.dirname(startFilePath) : undefined;
+
+        // 全词匹配时先问符号数据库。关掉全词匹配后要找的是任意一段文字，符号库答不了，直接全文搜索
+        if (matchWholeWord && !token?.isCancellationRequested) {
+            progress?.report({ message: '查询符号数据库' });
+            const symbolResults = await this.searchSymbolDatabase(
+                searchText,
+                caseSensitive,
+                matchWholeWord,
+                excludeDirs,
+                excludeExts,
+                token
+            );
+            if (token?.isCancellationRequested) {
+                return [];
+            }
+            if (symbolResults) {
+                await functionResolver.enrichResults(symbolResults, token);
+                if (token?.isCancellationRequested) {
+                    return [];
+                }
+                const ranked = this.rankResults(symbolResults, startDir, activeFilePath);
+                onResults?.(ranked, true);
+                return ranked;
+            }
+            progress?.report({ message: '改用文本搜索' });
+        }
+
+        // 符号数据库不可用时才需要 rg。VS Code、Cursor、Trae 等目录都没有 rg 时，提示设置路径
+        if (!this.rgPath || !RipGrepSearch.isExistingFile(this.rgPath)) {
+            RipGrepSearch.promptToSetRipGrepPath();
+            onResults?.([], true);
+            return [];
+        }
 
         // 构建排除目录的 glob 模式
         const excludeArgs = [
@@ -908,9 +1408,6 @@ class RipGrepSearch {
             ...(caseSensitive ? [] : ['-i']),
             ...excludeArgs
         ];
-
-        const activeFilePath = vscode.window.activeTextEditor?.document.uri.fsPath;
-        const startDir = startFilePath ? path.dirname(startFilePath) : undefined;
 
         const allResults: SearchResult[] = [];
         const seenLocations = new Set<string>();
@@ -1446,9 +1943,13 @@ export function activate(context: vscode.ExtensionContext) {
                     reloadWritePatterns();
                 }
 
+                if (e.affectsConfiguration('searchhighlight.ripgrepPath')) {
+                    ripGrepSearch.refreshRipGrepPath();
+                }
+
                 // 这些配置会影响搜索结果或读写属性，需要重新搜索
                 const searchKeys = ['patterns', 'caseSensitive', 'matchWholeWord',
-                    'excludePatterns', 'excludeFileExtensions', 'respectGitIgnore'];
+                    'excludePatterns', 'excludeFileExtensions', 'respectGitIgnore', 'ripgrepPath'];
                 const changedSearchKeys = searchKeys.filter(key => e.affectsConfiguration(`searchhighlight.${key}`));
                 if (changedSearchKeys.length > 0) {
                     debugLog('搜索相关配置变更，重新执行搜索');

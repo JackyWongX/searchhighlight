@@ -8,7 +8,7 @@ SearchHighlight 是一个用于搜索代码中变量、函数等标识符的 VSC
 
 ## 功能特点
 
-- 快速搜索工作区内的代码标识符
+- 快速搜索工作区内的代码标识符。优先用语言服务器的符号数据库；符号库不可用或查不到时，自动改用 ripgrep 全文搜索
 - 智能识别读写操作
 - 可自定义的读写操作高亮颜色
 - 丰富的写操作检测规则配置
@@ -95,6 +95,7 @@ SearchHighlight 是一个用于搜索代码中变量、函数等标识符的 VSC
 - `searchhighlight.matchWholeWord`: 是否全词匹配（默认：true）。编辑器里的高亮和 ripgrep 一样按 Unicode 分词，中文标识符也能完整匹配
 - `searchhighlight.excludePatterns`: 要排除的目录列表
 - `searchhighlight.respectGitIgnore`: 是否遵循 `.gitignore` 等忽略规则（默认：false，即搜索时忽略这些规则）
+- `searchhighlight.ripgrepPath`: ripgrep 可执行文件的绝对路径（默认：留空）。留空时先找 VS Code 安装目录里的 ripgrep，找不到再找 Cursor、Trae 等常见编辑器，最后再找 PATH。这些地方都没有时，搜索会提示你填写这一项
 - `searchhighlight.debug`: 是否在输出面板打印调试日志（默认：false）
 - `searchhighlight.excludeFileExtensions`: 要排除的文件后缀列表，默认包含：
   - 自动生成的代码文件（.pb.h, .pb.cc, .generated.h, .generated.cpp 等）
@@ -122,8 +123,15 @@ SearchHighlight 是一个用于搜索代码中变量、函数等标识符的 VSC
 - PHP (.php)
 
 ## 注意
-- 本插件使用vscode自带的rg.exe来快速搜索文件，在大型项目中也能快速处理
-- 若搜索较慢请检查rg.exe的路径或者手动添加到系统path中后重试
+- 打开「全词匹配」时，搜索会先问语言服务器的符号数据库。查到这个完整名字后，用它的引用作为搜索结果，并照常按读、写上色
+- 下面几种情况会自动改用 ripgrep 扫描文件：没有符号数据库、查询超时、符号库里没有这个名字、没有拿到引用，或同名符号太多（超过 30 个）
+- 关掉「全词匹配」时直接使用 ripgrep。符号库只认识完整名字，不能按任意一段文字搜索
+- 符号库给出的是语言服务器认定的同一个符号。别处同名、但互不相干的局部变量，可能不会出现在这批结果里
+- 只有改用 ripgrep 时才需要 rg 程序。符号数据库能回答时，没有 rg 也可以搜索
+- ripgrep 优先使用 VS Code 安装目录里的 rg，在大型项目中也能快速处理
+- 安装目录里没有 rg 时，会继续到 Cursor、Trae、Trae CN、Windsurf、VSCodium 等基于 VS Code 的编辑器安装目录，以及系统 PATH 里查找
+- 这些地方都找不到时，会弹出提示，让你设置 `searchhighlight.ripgrepPath`（rg 程序的完整路径）
+- 若已经找到 rg 但全文搜索仍然很慢，可以检查排除目录配置，或把 rg 加到系统 PATH 后重试
 
 ## 贡献
 
