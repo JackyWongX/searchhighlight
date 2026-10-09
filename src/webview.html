@@ -182,14 +182,9 @@
             overflow: hidden;
             text-overflow: ellipsis;
         }
-        .highlight-read, .highlight-write {
+        .highlight-read, .highlight-write, .highlight-call {
             white-space: nowrap;
             display: inline-block;
-        }
-        .highlight-read {
-            border-radius: 2px;
-        }
-        .highlight-write {
             border-radius: 2px;
         }
         .results-empty {
@@ -299,7 +294,8 @@
             // 默认高亮颜色，同时作为非法颜色配置的回退值
             const DEFAULT_COLORS = {
                 read: 'rgba(64, 200, 64, 0.2)',
-                write: 'rgba(240, 64, 64, 0.2)'
+                write: 'rgba(240, 64, 64, 0.2)',
+                call: 'rgba(184, 78, 0, 0.55)'
             };
             let currentColors = { ...DEFAULT_COLORS };
             let searchOptions = {
@@ -316,6 +312,7 @@
             let groupElements = new Map();
             let renderedTotal = 0;
             let renderedWriteCount = 0;
+            let renderedCallCount = 0;
 
             // 只接受合法的 CSS 颜色，避免配置里的内容被当作样式注入
             function safeColor(value, fallback) {
@@ -340,7 +337,8 @@
                 }
                 currentColors = {
                     read: safeColor(colors.read, DEFAULT_COLORS.read),
-                    write: safeColor(colors.write, DEFAULT_COLORS.write)
+                    write: safeColor(colors.write, DEFAULT_COLORS.write),
+                    call: safeColor(colors.call, DEFAULT_COLORS.call)
                 };
                 colorsStyleEl.textContent = `
                     .highlight-read {
@@ -348,6 +346,9 @@
                     }
                     .highlight-write {
                         background-color: ${currentColors.write};
+                    }
+                    .highlight-call {
+                        background-color: ${currentColors.call};
                     }
                 `;
             }
@@ -619,6 +620,16 @@
             window.addEventListener('message', event => {
                 const message = event.data;
                 switch (message.type) {
+                    case 'searching':
+                        if (message.searchId !== currentSearchId) {
+                            currentSearchId = message.searchId;
+                            resetResults();
+                        }
+                        if (message.searchText) {
+                            document.getElementById('search-input').value = message.searchText;
+                        }
+                        document.getElementById('summary-text').textContent = '正在搜索…';
+                        break;
                     case 'results':
                         if (message.colors) {
                             currentColors = message.colors;
@@ -663,18 +674,23 @@
                 groupElements = new Map();
                 renderedTotal = 0;
                 renderedWriteCount = 0;
+                renderedCallCount = 0;
                 currentSelectedItem = null;
             }
 
-            function updateSummary(total, writeCount) {
+            function updateSummary(total, writeCount, callCount) {
+                const readCount = total - writeCount - callCount;
+                const callPart = callCount > 0 ? `，${callCount} 处函数调用` : '';
                 document.getElementById('summary-text').textContent =
-                    `找到 ${total} 处匹配：${total - writeCount} 处读操作，${writeCount} 处写操作`;
+                    `找到 ${total} 处匹配：${readCount} 处读操作，${writeCount} 处写操作${callPart}`;
             }
 
             // 生成单条结果的 HTML
             function renderItemHtml(result) {
                 const line = result.lineContent;
-                const highlightClass = result.isWrite ? 'highlight-write' : 'highlight-read';
+                const highlightClass = result.isWrite
+                    ? 'highlight-write'
+                    : (result.isCall ? 'highlight-call' : 'highlight-read');
 
                 // 创建带有高亮的行内容
                 const matchStart = result.matchStart === undefined ? 0 : result.matchStart;
@@ -768,6 +784,8 @@
                     renderedTotal++;
                     if (result.isWrite) {
                         renderedWriteCount++;
+                    } else if (result.isCall) {
+                        renderedCallCount++;
                     }
 
                     const dir = path.dirname(result.file);
@@ -805,7 +823,7 @@
                 if (mode !== 'final') {
                     appendResults(results);
                     // 总数和写操作数都按已经画出来的结果算，过渡期两边才对得上
-                    updateSummary(renderedTotal, renderedWriteCount);
+                    updateSummary(renderedTotal, renderedWriteCount, renderedCallCount);
                     return;
                 }
 
@@ -813,7 +831,7 @@
                 const state = captureViewState();
                 resetResults();
                 appendResults(results);
-                updateSummary(renderedTotal, renderedWriteCount);
+                updateSummary(renderedTotal, renderedWriteCount, renderedCallCount);
                 if (renderedTotal === 0) {
                     const empty = document.createElement('div');
                     empty.className = 'results-empty';

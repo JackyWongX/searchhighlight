@@ -1,3 +1,4 @@
+/// <reference types="node" />
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -6,7 +7,7 @@ import * as crypto from 'crypto';
 import * as jschardet from 'jschardet';
 import * as iconv from 'iconv-lite';
 import { StringDecoder } from 'string_decoder';
-import { WriteOperationDetector, WritePatterns, buildIdentifierSearchRegex, chooseMatchRange, isDashCommentFile, isHashCommentFile } from './writeDetector';
+import { WriteOperationDetector, WritePatterns, buildIdentifierSearchRegex, chooseMatchRange, isDashCommentFile, isFunctionCall, isHashCommentFile } from './writeDetector';
 
 interface SearchResult {
     file: string;
@@ -14,6 +15,8 @@ interface SearchResult {
     line: number;
     lineContent: string;
     isWrite: boolean;
+    // 这一处是函数或方法调用。定义、声明，以及只把名字当普通值用的地方不是调用
+    isCall: boolean;
     matchStart?: number;
     matchEnd?: number;
     functionName?: string;
@@ -408,6 +411,8 @@ class RipGrepSearch {
 
     // 流式推送结果的合并间隔（毫秒），避免结果很多时频繁刷新界面
     private static readonly RESULT_FLUSH_INTERVAL = 120;
+    // 结果页一次最多画这么多条。再多的话 Cursor 会把整页清成空白
+    private static readonly MAX_VIEW_RESULTS = 500;
     // 无论配置如何都必须排除的目录，避免 --no-ignore 时遍历版本库元数据
     private static readonly MANDATORY_EXCLUDE_DIRS = ['.git', '.hg', '.svn'];
     // 符号数据库查询超时：语言服务没就绪时不要一直卡住，超时后改用 ripgrep
@@ -876,18 +881,28 @@ class RipGrepSearch {
     }
 
     // 解析 ripgrep 的 --json 输出，避免手工切分路径、行号和行内容
-    private executeRipGrep(rgArgs: string[], caseSensitive: boolean, matchWholeWord: boolean, searchText: string, token?: vscode.CancellationToken, onMatch?: (result: SearchResult) => void): Promise<SearchResult[]> {
-        return new Promise<SearchResult[]>((resolve, reject) => {
+    // 给 rg 用的环境：去掉编辑器自己的配置，避免 Cursor 的配置把全文搜索滤成 0 条
+    private ripgrepEnv(): NodeJS.ProcessEnv {
+        const env: NodeJS.ProcessEnv = { ...process.env };
+        delete env.ELECTRON_RUN_AS_NODE;
+        delete env.ELECTRON_NO_ASAR;
+        delete env.RIPGREP_CONFIG_PATH;
+        env.LANG = 'zh_CN.UTF-8';
+        env.LC_ALL = 'zh_CN.UTF-8';
+        return env;
+    }
+
+    private executeRipGrep(rgArgs: string[], caseSensitive: boolean, matchWholeWord: boolean, searchText: string, searchRoot: string, token?: vscode.CancellationToken, onMatch?: (result: SearchResult) => boolean | void): Promise<{ exitCode: number | null; stdoutBytes: number }> {
+        return new Promise<{ exitCode: number | null; stdoutBytes: number }>((resolve, reject) => {
             debugLog(`执行命令: ${this.rgPath} ${rgArgs.join(' ')}`);
 
             const rg = cp.spawn(this.rgPath, rgArgs, {
+                cwd: searchRoot,
                 stdio: ['ignore', 'pipe', 'pipe'],
                 windowsHide: true,
-                env: {
-                    ...process.env,
-                    LANG: 'zh_CN.UTF-8',
-                    LC_ALL: 'zh_CN.UTF-8'
-                }
+                // 不把编辑器进程的环境原样传下去。Cursor 会设置 RIPGREP_CONFIG_PATH，
+                // rg 若读了那份配置，关掉全词匹配时可能一条结果都没有
+                env: this.ripgrepEnv()
             });
 
             const stdoutDecoder = new StringDecoder('utf8');
@@ -898,6 +913,8 @@ class RipGrepSearch {
             let buffer = '';
             let errorOutput = '';
             let finished = false;
+            let exitCode: number | null = null;
+            let stdoutBytes = 0;
             let cancelSubscription: vscode.Disposable | undefined;
 
             const finish = () => {
@@ -906,7 +923,7 @@ class RipGrepSearch {
                 }
                 finished = true;
                 cancelSubscription?.dispose();
-                resolve(fileResults);
+                resolve({ exitCode, stdoutBytes });
             };
 
             // 处理一条 --json 事件
@@ -965,20 +982,29 @@ class RipGrepSearch {
                     line: lineNumber - 1,
                     lineContent: display.content,
                     isWrite: chosen.isWrite,
+                    isCall: chosen.isCall,
                     matchStart: display.matchStart,
                     matchEnd: display.matchEnd
                 };
                 fileResults.push(result);
-                onMatch?.(result);
+                // 返回 false 表示结果已经够了，停掉 rg，避免把结果页撑爆
+                if (onMatch?.(result) === false) {
+                    rg.kill();
+                }
             };
 
             rg.stdout.on('data', (data: Buffer) => {
+                stdoutBytes += data.length;
                 // --json 输出固定为 UTF-8，用 StringDecoder 处理跨数据块的多字节字符
                 buffer += stdoutDecoder.write(data);
                 const lines = buffer.split('\n');
                 buffer = lines.pop() || '';
                 for (const line of lines) {
-                    handleEvent(line);
+                    try {
+                        handleEvent(line);
+                    } catch (error) {
+                        console.error('解析 ripgrep 输出失败:', error);
+                    }
                 }
             });
 
@@ -1007,6 +1033,7 @@ class RipGrepSearch {
             });
 
             rg.on('close', (code: number | null) => {
+                exitCode = code;
                 if (errorOutput) {
                     console.error(`ripgrep 错误输出: ${errorOutput}`);
                 }
@@ -1014,7 +1041,11 @@ class RipGrepSearch {
                 // 处理最后一段没有以换行结尾的输出
                 buffer += stdoutDecoder.end();
                 if (buffer.trim()) {
-                    handleEvent(buffer);
+                    try {
+                        handleEvent(buffer);
+                    } catch (error) {
+                        console.error('解析 ripgrep 输出失败:', error);
+                    }
                 }
                 buffer = '';
 
@@ -1299,6 +1330,7 @@ class RipGrepSearch {
                     line,
                     lineContent: display.content,
                     isWrite: chosen.isWrite,
+                    isCall: chosen.isCall,
                     matchStart: display.matchStart,
                     matchEnd: display.matchEnd
                 });
@@ -1410,6 +1442,8 @@ class RipGrepSearch {
         // 每次搜索都重新构建的基础参数
         const baseArgs = [
             '--json',
+            // 不读 rg 的配置文件。Cursor 会给扩展进程设一份配置，读了它之后关掉全词匹配就可能没有结果
+            '--no-config',
             '--hidden',
             ...(respectGitIgnore ? [] : ['--no-ignore']),
             '--fixed-strings',
@@ -1450,16 +1484,25 @@ class RipGrepSearch {
             }, RipGrepSearch.RESULT_FLUSH_INTERVAL - elapsed);
         };
 
-        // 按文件+行号去重，同一行只保留第一条结果
-        const collect = (result: SearchResult): void => {
+        let reachedResultCap = false;
+        // 按文件+行号去重，同一行只保留第一条结果。够 500 条就停，避免结果页被撑成空白
+        const collect = (result: SearchResult): boolean => {
             const key = locationKey(result.file, result.line);
             if (seenLocations.has(key)) {
-                return;
+                return true;
+            }
+            if (allResults.length >= RipGrepSearch.MAX_VIEW_RESULTS) {
+                if (!reachedResultCap) {
+                    reachedResultCap = true;
+                    progress?.report({ message: `结果较多，只显示前 ${RipGrepSearch.MAX_VIEW_RESULTS} 条` });
+                }
+                return false;
             }
             seenLocations.add(key);
             allResults.push(result);
             deltaBuffer.push(result);
             scheduleFlush();
+            return true;
         };
 
         // 单次扫描：每个工作区根目录只搜一遍
@@ -1469,7 +1512,7 @@ class RipGrepSearch {
 
         const settled = await Promise.allSettled(roots.map(async root => {
             const rgArgs = [...baseArgs, '--', searchText, root];
-            await this.executeRipGrep(rgArgs, caseSensitive, matchWholeWord, searchText, token, collect);
+            await this.executeRipGrep(rgArgs, caseSensitive, matchWholeWord, searchText, root, token, collect);
         }));
 
         if (pendingFlush) {
@@ -1531,6 +1574,12 @@ class SearchResultsProvider implements vscode.WebviewViewProvider {
     private static readonly HISTORY_LIMIT = 30;
 
     private _view?: vscode.WebviewView;
+    // 页面脚本发出 ready 之后才算真正能显示。在这之前发消息，Cursor 会把结果页清成空白
+    private _viewReady = false;
+    private _readyWaiters: Array<() => void> = [];
+    private _pendingFocus = false;
+    // 上次把页面写进视图的时间。刚写完不要立刻再写，否则页面会一直重开
+    private _htmlAppliedAt = 0;
     private _extensionUri: vscode.Uri;
     private _context: vscode.ExtensionContext;
     // 最近搜索在数组最前面，相同内容只保留一条
@@ -1574,6 +1623,13 @@ class SearchResultsProvider implements vscode.WebviewViewProvider {
         _token: vscode.CancellationToken,
     ) {
         this._view = webviewView;
+        this._viewReady = false;
+        webviewView.onDidDispose(() => {
+            if (this._view === webviewView) {
+                this._view = undefined;
+                this._viewReady = false;
+            }
+        });
 
         webviewView.webview.options = {
             enableScripts: true,
@@ -1600,7 +1656,12 @@ class SearchResultsProvider implements vscode.WebviewViewProvider {
                     await config.update(message.option, message.value, vscode.ConfigurationTarget.Global);
                     break;
                 case 'ready':
+                    this._markViewReady();
                     this._postSearchHistory();
+                    if (this._pendingFocus) {
+                        this._pendingFocus = false;
+                        this._view?.webview.postMessage({ type: 'focusSearch' });
+                    }
                     // 快捷键会一边打开结果页一边搜索。搜索先完成时，结果消息会丢，这里等页面准备好再补发一次
                     if (this._currentSearchResults) {
                         this._postResults(
@@ -1660,6 +1721,12 @@ class SearchResultsProvider implements vscode.WebviewViewProvider {
             }
         });
 
+        this._applyHtml(webviewView);
+    }
+
+    // 把结果页写进视图。写失败时也要留一句说明，不能留下空白
+    private _applyHtml(webviewView: vscode.WebviewView): void {
+        this._htmlAppliedAt = Date.now();
         try {
             webviewView.webview.html = this._getHtmlForWebview();
         } catch (error) {
@@ -1667,6 +1734,17 @@ class SearchResultsProvider implements vscode.WebviewViewProvider {
             const message = error instanceof Error ? error.message : String(error);
             webviewView.webview.html = `<!DOCTYPE html><html><body style="padding:12px;font-family:sans-serif;"><p>结果页加载失败：${message}</p></body></html>`;
         }
+    }
+
+    // 页面过了半秒还是空白，再画一次。刚画完的不要立刻重画
+    public ensurePage(): void {
+        if (!this._view || this._viewReady) {
+            return;
+        }
+        if (Date.now() - this._htmlAppliedAt < 500) {
+            return;
+        }
+        this._applyHtml(this._view);
     }
 
     public showResults(results: SearchResult[], searchText: string) {
@@ -1682,18 +1760,19 @@ class SearchResultsProvider implements vscode.WebviewViewProvider {
             this._currentSearchResults = { results, searchText, searchId };
         }
 
-        if (!this._view) {
+        // 页面还没准备好时先不发。提前发消息会让 Cursor 把整页清成空白，结果留到 ready 再补发
+        if (!this._view || !this._viewReady) {
             return;
         }
 
-        // 这里不要再调用 show()。结果页正在打开时再 show，Cursor 会把页面清成空白
         this._view.webview.postMessage({
             type: 'results',
             results,
             searchText, // 将搜索文本传递给 webview 用于显示在输入框
             colors: {
                 read: config.get<string>('colors.read'),
-                write: config.get<string>('colors.write')
+                write: config.get<string>('colors.write'),
+                call: config.get<string>('colors.call')
             },
             searchOptions: this._getSearchOptions(),
             mode,
@@ -1701,16 +1780,55 @@ class SearchResultsProvider implements vscode.WebviewViewProvider {
         });
     }
 
-    // 添加方法来聚焦输入框
+    // 聚焦搜索框。不要调用 show()，结果页正在打开时再 show，Cursor 会把页面清成空白
     public focusSearchInput() {
-        if (this._view) {
-            // 先确保视图显示
-            this._view.show(true);
-            // 发送消息让 webview 聚焦到输入框
-            this._view.webview.postMessage({
-                type: 'focusSearch'
-            });
+        if (this._view && this._viewReady) {
+            this._view.webview.postMessage({ type: 'focusSearch' });
+            return;
         }
+        this._pendingFocus = true;
+    }
+
+    // 等结果页真正画出来。超时后继续搜索，结果会在页面准备好时补上
+    public whenViewReady(timeoutMs = 2000): Promise<void> {
+        if (this._viewReady && this._view) {
+            return Promise.resolve();
+        }
+        return new Promise(resolve => {
+            let settled = false;
+            const finish = () => {
+                if (settled) {
+                    return;
+                }
+                settled = true;
+                clearTimeout(timer);
+                resolve();
+            };
+            const timer = setTimeout(finish, timeoutMs);
+            this._readyWaiters.push(finish);
+            if (this._viewReady && this._view) {
+                finish();
+            }
+        });
+    }
+
+    private _markViewReady(): void {
+        this._viewReady = true;
+        const waiters = this._readyWaiters.splice(0);
+        for (const waiter of waiters) {
+            waiter();
+        }
+    }
+
+    private _postSearching(searchText: string, searchId: number): void {
+        if (!this._view || !this._viewReady) {
+            return;
+        }
+        this._view.webview.postMessage({
+            type: 'searching',
+            searchText,
+            searchId
+        });
     }
 
     // 记住这次搜索：最近的放最前，重复的旧记录删掉
@@ -1728,7 +1846,10 @@ class SearchResultsProvider implements vscode.WebviewViewProvider {
     }
 
     private _postSearchHistory(): void {
-        this._view?.webview.postMessage({
+        if (!this._view || !this._viewReady) {
+            return;
+        }
+        this._view.webview.postMessage({
             type: 'searchHistory',
             history: this._searchHistory
         });
@@ -1748,29 +1869,44 @@ class SearchResultsProvider implements vscode.WebviewViewProvider {
         this._activeSearchCts = cts;
         const isStale = () => searchId !== this._searchId;
 
+        // 先等结果页画出来再搜。半秒后还是空白，就再画一次
+        await this.whenViewReady(700);
+        if (!this._viewReady && !isStale()) {
+            this.ensurePage();
+            await this.whenViewReady(1500);
+        }
+        if (isStale()) {
+            cts.dispose();
+            return;
+        }
+        this._postSearching(searchText, searchId);
+
+        // 不用可取消的进度条。Cursor 里那种进度一出现就会把正在跑的 ripgrep 停掉，
+        // 关掉全词匹配时搜索只靠 ripgrep，结果就会变成 0 条
+        let status = vscode.window.setStatusBarMessage(`搜索 "${searchText}"`);
+        const progress = {
+            report: ({ message }: { message: string }) => {
+                status.dispose();
+                status = vscode.window.setStatusBarMessage(`搜索 "${searchText}"：${message}`);
+            }
+        };
         try {
-            // 进度放在状态栏，不跟搜索的取消绑在一起。
-            // Cursor 里右下角那种可取消进度会一出来就被关掉，取消信号会把 ripgrep 立刻杀掉，结果就变成 0 条
-            await vscode.window.withProgress({
-                location: vscode.ProgressLocation.Window,
-                title: `搜索 "${searchText}"`
-            }, async (progress) => {
-                try {
-                    await ripGrepSearch.search(searchText, startFilePath, (results, isFinal) => {
-                        // 丢弃过期搜索的结果
-                        if (isStale()) {
-                            return;
-                        }
-                        this._postResults(results, searchText, isFinal ? 'final' : 'delta', searchId);
-                    }, progress, cts.token);
-                } catch (error) {
-                    if (!isStale()) {
-                        console.error('搜索过程中发生错误:', error);
-                        vscode.window.showErrorMessage('搜索过程中发生错误');
+            try {
+                await ripGrepSearch.search(searchText, startFilePath, (results, isFinal) => {
+                    // 丢弃过期搜索的结果
+                    if (isStale()) {
+                        return;
                     }
+                    this._postResults(results, searchText, isFinal ? 'final' : 'delta', searchId);
+                }, progress, cts.token);
+            } catch (error) {
+                if (!isStale()) {
+                    console.error('搜索过程中发生错误:', error);
+                    vscode.window.showErrorMessage('搜索过程中发生错误');
                 }
-            });
+            }
         } finally {
+            status.dispose();
             if (this._activeSearchCts === cts) {
                 this._activeSearchCts = undefined;
             }
@@ -1816,11 +1952,13 @@ class SearchResultsProvider implements vscode.WebviewViewProvider {
         const config = vscode.workspace.getConfiguration('searchhighlight');
         const readColor = config.get<string>('colors.read', '#FFEB3B');
         const writeColor = config.get<string>('colors.write', '#FF5252');
+        const callColor = config.get<string>('colors.call', 'rgba(184, 78, 0, 0.55)');
         const { caseSensitive, matchWholeWord } = this._getSearchOptions();
 
-        // 读写操作的高亮样式按颜色复用，避免每次跳转都重新创建
+        // 读写操作和函数调用的高亮样式按颜色复用，避免每次跳转都重新创建
         const readDecorationType = this.getDecorationType(readColor);
         const writeDecorationType = this.getDecorationType(writeColor);
+        const callDecorationType = this.getDecorationType(callColor);
 
         // 与搜索使用同一套全词规则，中文等非 ASCII 标识符也能对上边界
         const searchRegex = RipGrepSearch.buildSearchRegex(searchText, caseSensitive, matchWholeWord);
@@ -1828,6 +1966,7 @@ class SearchResultsProvider implements vscode.WebviewViewProvider {
         // 遍历文档中的每一行
         const readDecorations: vscode.DecorationOptions[] = [];
         const writeDecorations: vscode.DecorationOptions[] = [];
+        const callDecorations: vscode.DecorationOptions[] = [];
 
         for (let i = 0; i < editor.document.lineCount; i++) {
             const lineText = editor.document.lineAt(i).text;
@@ -1853,10 +1992,13 @@ class SearchResultsProvider implements vscode.WebviewViewProvider {
                 const afterText = lineText.substring(match.index + match[0].length);
                 const beforeText = lineText.substring(0, match.index);
                 const isWrite = writeDetector.isWriteOperation(afterText, beforeText, editor.document.uri.fsPath);
+                const isCall = !isWrite && isFunctionCall(beforeText, afterText, editor.document.uri.fsPath);
 
                 const decoration = { range };
                 if (isWrite) {
                     writeDecorations.push(decoration);
+                } else if (isCall) {
+                    callDecorations.push(decoration);
                 } else {
                     readDecorations.push(decoration);
                 }
@@ -1864,10 +2006,11 @@ class SearchResultsProvider implements vscode.WebviewViewProvider {
         }
 
         // 应用高亮
-        if (readDecorations.length > 0 || writeDecorations.length > 0) {
+        if (readDecorations.length > 0 || writeDecorations.length > 0 || callDecorations.length > 0) {
             try {
                 editor.setDecorations(readDecorationType, readDecorations);
                 editor.setDecorations(writeDecorationType, writeDecorations);
+                editor.setDecorations(callDecorationType, callDecorations);
             } catch (error) {
                 // 编辑器已经关闭时忽略
                 debugLog('应用高亮失败:', error);
@@ -1875,7 +2018,7 @@ class SearchResultsProvider implements vscode.WebviewViewProvider {
             }
 
             this._decoratedEditor = editor;
-            this._decoratedTypes = [readDecorationType, writeDecorationType];
+            this._decoratedTypes = [readDecorationType, writeDecorationType, callDecorationType];
             this._highlightedDocKey = pathKey(editor.document.uri.fsPath);
             // 设置上下文变量，标记有高亮存在
             vscode.commands.executeCommand('setContext', 'searchHighlightActive', true);
@@ -1951,8 +2094,9 @@ export function activate(context: vscode.ExtensionContext) {
             'searchHighlightResults',
             searchResultsProvider,
             {
+                // 不要保留隐藏时的页面。Cursor 会把保留下来的旧页面恢复成一片空白，而且不再重新画
                 webviewOptions: {
-                    retainContextWhenHidden: true  // 切换视图时保持 WebView 内容
+                    retainContextWhenHidden: false
                 }
             }
         );
@@ -2087,6 +2231,7 @@ export function activate(context: vscode.ExtensionContext) {
                 // 确保搜索结果视图是可见的
                 debugLog('正在显示搜索结果视图...');
                 await ensureViewIsVisible();
+                searchResultsProvider.ensurePage();
 
                 // 显示进度提示并执行搜索
                 debugLog('开始执行搜索...');

@@ -1072,27 +1072,272 @@ export class WriteOperationDetector {
     }
 }
 
-// 同一行可能多次出现被搜索的名字。结果列表一行只显示一处，优先标出真正被写的那一次
+// 引入函数定义的关键字。这些词紧挨在名字前面时，后面的括号是定义，不是调用
+const DEFINITION_KEYWORDS = new Set([
+    'function', 'func', 'fn', 'fun', 'def', 'sub', 'procedure', 'method',
+    'macro', 'subroutine', 'defun', 'defn', 'define'
+]);
+
+// 声明修饰符。紧挨在名字前面时，这一处是声明，例如 public foo(、static foo(
+const DECLARATION_MODIFIERS = new Set([
+    'async', 'export', 'public', 'private', 'protected', 'static', 'virtual',
+    'override', 'final', 'inline', 'constexpr', 'consteval', 'constinit',
+    'friend', 'extern', 'explicit', 'abstract', 'sealed', 'internal', 'pub',
+    'native', 'synchronized', 'open', 'partial', 'unsafe', 'mutable', 'volatile',
+    'register', 'unsigned', 'signed', 'short', 'long', 'typename', 'declare',
+    'readonly', 'required', 'suspend', 'tailrec', 'external', 'expect', 'actual',
+    'crate', 'fileprivate', 'operator', 'shared', 'module', 'const', 'mut', 'global'
+]);
+
+// 常见返回类型。紧挨在名字前面时按声明处理，例如 void foo(、int *foo(
+const TYPE_KEYWORDS = new Set([
+    'void', 'int', 'char', 'bool', 'boolean', 'float', 'double', 'byte', 'sbyte',
+    'uint', 'ulong', 'ushort', 'string', 'object', 'auto', 'var', 'val', 'any',
+    'never', 'unknown', 'dynamic', 'self', 'size_t', 'wchar_t', 'integer', 'number',
+    'str', 'i8', 'i16', 'i32', 'i64', 'u8', 'u16', 'u32', 'u64', 'isize', 'usize',
+    'f32', 'f64', 'int8_t', 'int16_t', 'int32_t', 'int64_t', 'uint8_t', 'uint16_t',
+    'uint32_t', 'uint64_t'
+]);
+
+// 这些词后面的名字加括号，是在调用，例如 return foo(、new foo(、if foo(
+const CALL_KEYWORDS = new Set([
+    'return', 'if', 'while', 'for', 'switch', 'case', 'throw', 'new', 'await',
+    'yield', 'sizeof', 'typeof', 'delete', 'else', 'elif', 'elsif', 'elseif',
+    'do', 'catch', 'unless', 'when', 'assert', 'require', 'and', 'or', 'not',
+    'in', 'of', 'as', 'is', 'with', 'from', 'go', 'defer', 'select', 'default',
+    'then', 'echo', 'instanceof', 'keyof'
+]);
+
+// 参数列表结束后，这些词说明这是定义而不是调用，例如 foo() const、foo() override
+const DEFINITION_TRAIL_WORDS = new Set([
+    'const', 'volatile', 'override', 'final', 'noexcept', 'throw', 'mutable',
+    'try', 'abstract', 'virtual'
+]);
+
+type CallContext = 'call' | 'definition' | 'ambiguous';
+
+// 名字后面是不是调用括号。允许空白、可选的 ?.，以及 foo<int>( 这种类型参数
+function indexOfCallParen(afterText: string): number {
+    let i = skipSpaces(afterText, 0);
+    if (afterText.startsWith('?.', i)) {
+        i = skipSpaces(afterText, i + 2);
+        return afterText[i] === '(' ? i : -1;
+    }
+    // Rust 的 foo::<T>()
+    if (afterText.startsWith('::', i)) {
+        i = skipSpaces(afterText, i + 2);
+    }
+    if (afterText[i] === '<') {
+        // <=、<<、<- 是运算符，不是类型参数
+        if (afterText.startsWith('<=', i) || afterText.startsWith('<<', i) || afterText.startsWith('<-', i)) {
+            return -1;
+        }
+        const end = skipBalancedGroup(afterText, i, '<', '>');
+        if (end < 0) {
+            return -1;
+        }
+        i = skipSpaces(afterText, end);
+    }
+    return afterText[i] === '(' ? i : -1;
+}
+
+// 参数列表右边如果是函数体、返回类型或 = 0 / = default，这一行是定义或声明
+function hasDefinitionTail(afterText: string, parenAt: number, filePath: string): boolean {
+    const end = skipBalancedGroup(afterText, parenAt, '(', ')');
+    // 括号没在这一行里结束时，区分不了跨行的定义和调用，留给前面的关键字去判断
+    if (end < 0) {
+        return false;
+    }
+    let i = end;
+    const comments = lineCommentPrefixes(filePath);
+    while (i < afterText.length) {
+        if (isWhitespace(afterText[i])) {
+            i++;
+            continue;
+        }
+        if (afterText.startsWith('/*', i)) {
+            const close = afterText.indexOf('*/', i + 2);
+            if (close < 0) {
+                return false;
+            }
+            i = close + 2;
+            continue;
+        }
+        if (comments.some(prefix => afterText.startsWith(prefix, i))) {
+            return false;
+        }
+        break;
+    }
+    if (i >= afterText.length) {
+        return false;
+    }
+    if (afterText[i] === '{') {
+        return true;
+    }
+    // foo(): void、构造函数的 foo() : base。三元运算的冒号前面会有 ?，不会走到这里
+    if (afterText[i] === ':' && !afterText.startsWith('::', i)) {
+        return true;
+    }
+    if (afterText.startsWith('->', i) || afterText[i] === '&') {
+        return true;
+    }
+    if (afterText[i] === '=') {
+        // 纯虚函数 foo() = 0，以及 = default / = delete
+        return /^(0|default|delete)\b/u.test(afterText.slice(i + 1).trimStart());
+    }
+    const word = /^[\p{L}_][\p{L}\p{N}_]*/u.exec(afterText.slice(i));
+    return !!word && DEFINITION_TRAIL_WORDS.has(word[0].toLowerCase());
+}
+
+// 名字左边是调用、定义，还是行首这种两边都可能的位置
+function classifyPreceding(beforeText: string): CallContext {
+    let end = beforeText.length;
+    const back = (): CallContext => {
+        while (end > 0 && isWhitespace(beforeText[end - 1])) {
+            end--;
+        }
+        while (end >= 2 && beforeText[end - 2] === '*' && beforeText[end - 1] === '/') {
+            const start = beforeText.lastIndexOf('/*', end - 2);
+            end = start < 0 ? 0 : start;
+            while (end > 0 && isWhitespace(beforeText[end - 1])) {
+                end--;
+            }
+        }
+        if (end === 0) {
+            return 'ambiguous';
+        }
+        if (beforeText.endsWith('?.', end) || beforeText.endsWith('->', end)) {
+            return 'call';
+        }
+        if (beforeText.endsWith('::', end)) {
+            end -= 2;
+            while (end > 0 && isIdentifierChar(beforeText[end - 1])) {
+                end--;
+            }
+            return back();
+        }
+        if (beforeText[end - 1] === '.') {
+            return 'call';
+        }
+        // PHP 的 $foo()，$ 不算名字的一部分，但这里确实是在调用
+        if (beforeText[end - 1] === '$') {
+            return 'call';
+        }
+        if (isIdentifierChar(beforeText[end - 1])) {
+            let start = end;
+            while (start > 0 && isIdentifierChar(beforeText[start - 1])) {
+                start--;
+            }
+            const word = beforeText.slice(start, end).toLowerCase();
+            if (DEFINITION_KEYWORDS.has(word)) {
+                return 'definition';
+            }
+            if (CALL_KEYWORDS.has(word)) {
+                return 'call';
+            }
+            if (DECLARATION_MODIFIERS.has(word) || TYPE_KEYWORDS.has(word)) {
+                return 'definition';
+            }
+            // 剩下的标识符多半是返回类型，例如 MyType foo(
+            return 'definition';
+        }
+        const ch = beforeText[end - 1];
+        if (ch === ')') {
+            // Go 的 func (s *T) Name(。只认紧挨着名字的那一对接收者括号，避免 if (func) foo( 被当成定义
+            if (/\b(?:func|function)\s*\([^()]*\)\s*$/u.test(beforeText.slice(0, end))) {
+                return 'definition';
+            }
+            return 'call';
+        }
+        if (ch === '>') {
+            // x > foo( 是比较；vector<int> foo( 的 > 紧挨着类型，是声明
+            if (end >= 2 && (beforeText[end - 2] === '=' || beforeText[end - 2] === '-' || isWhitespace(beforeText[end - 2]))) {
+                return 'call';
+            }
+            return 'definition';
+        }
+        if (ch === '*' || ch === '&') {
+            // *foo() 是调用函数指针；int *foo(、function* foo( 是声明
+            let j = end;
+            while (j > 0 && (beforeText[j - 1] === '*' || beforeText[j - 1] === '&')) {
+                j--;
+            }
+            const saved = end;
+            end = j;
+            const inner = back();
+            end = saved;
+            return inner === 'definition' ? 'definition' : 'call';
+        }
+        if (ch === '#') {
+            end--;
+            return back();
+        }
+        return 'call';
+    };
+    return back();
+}
+
+/**
+ * 这一处是不是函数或方法调用。
+ * 名字后面要有调用括号（可以隔着空白或类型参数）。
+ * 定义和声明不算调用，例如 void foo(、function foo(、foo() {、func (s *T) foo(。
+ * obj.foo(、p->foo(、return foo(、foo() 算调用。
+ * 字符串和注释里的同名文本不算调用。
+ */
+export function isFunctionCall(beforeText: string, afterText: string, filePath = ''): boolean {
+    const prefix = scanPrefix(beforeText, lineCommentPrefixes(filePath));
+    if (prefix.inString || prefix.inComment) {
+        return false;
+    }
+    const parenAt = indexOfCallParen(afterText);
+    if (parenAt < 0) {
+        return false;
+    }
+    const preceding = classifyPreceding(beforeText);
+    if (preceding === 'call') {
+        return true;
+    }
+    if (preceding === 'definition') {
+        return false;
+    }
+    // 行首或 Foo::bar 这种位置：foo(); 是调用，foo() { 是定义
+    return !hasDefinitionTail(afterText, parenAt, filePath);
+}
+
+// 同一行可能多次出现被搜索的名字。结果列表一行只显示一处：优先写操作，其次函数调用
 export function chooseMatchRange(
     detector: WriteOperationDetector,
     content: string,
     ranges: { start: number; end: number }[],
     filePath: string
-): { start: number; end: number; isWrite: boolean } | undefined {
+): { start: number; end: number; isWrite: boolean; isCall: boolean } | undefined {
     if (ranges.length === 0) {
         return undefined;
     }
-    let chosen = ranges[0];
-    let isWrite = detector.isWriteOperation(content.slice(chosen.end), content.slice(0, chosen.start), filePath);
-    if (!isWrite) {
+    const describe = (range: { start: number; end: number }) => {
+        const before = content.slice(0, range.start);
+        const after = content.slice(range.end);
+        const isWrite = detector.isWriteOperation(after, before, filePath);
+        const isCall = !isWrite && isFunctionCall(before, after, filePath);
+        return { range, isWrite, isCall };
+    };
+    let chosen = describe(ranges[0]);
+    if (!chosen.isWrite) {
         for (let i = 1; i < ranges.length; i++) {
-            const range = ranges[i];
-            if (detector.isWriteOperation(content.slice(range.end), content.slice(0, range.start), filePath)) {
-                chosen = range;
-                isWrite = true;
+            const next = describe(ranges[i]);
+            if (next.isWrite) {
+                chosen = next;
                 break;
+            }
+            if (!chosen.isCall && next.isCall) {
+                chosen = next;
             }
         }
     }
-    return { start: chosen.start, end: chosen.end, isWrite };
+    return {
+        start: chosen.range.start,
+        end: chosen.range.end,
+        isWrite: chosen.isWrite,
+        isCall: chosen.isCall
+    };
 }

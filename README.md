@@ -2,7 +2,7 @@
 
 [English](https://github.com/JackyWongX/searchhighlight/blob/master/README_EN.md)
 
-SearchHighlight 是一个用于搜索代码中变量、函数等标识符的 VSCode 插件。它能够根据搜索结果所在行的上下文来判断该标识符是在进行读操作还是写操作，并以不同的颜色进行高亮显示。
+SearchHighlight 是一个用于搜索代码中变量、函数等标识符的 VSCode 插件。它能够根据搜索结果所在行的上下文来判断该标识符是在进行读操作、写操作，还是函数调用，并以不同的颜色进行高亮显示。
 
 ![演示](https://raw.githubusercontent.com/JackyWongX/searchhighlight/master/images/show.gif)
 
@@ -10,7 +10,8 @@ SearchHighlight 是一个用于搜索代码中变量、函数等标识符的 VSC
 
 - 快速搜索工作区内的代码标识符。优先用语言服务器的符号数据库；符号库不可用或查不到时，自动改用 ripgrep 全文搜索
 - 智能识别读写操作
-- 可自定义的读写操作高亮颜色
+- 函数调用用暗橙色高亮，和读、写区分开。名字后面紧跟着括号就算调用
+- 可自定义的读、写、函数调用高亮颜色
 - 丰富的写操作检测规则配置
 - 实时显示搜索结果统计
 - 支持按目录分组显示结果，并显示每处结果所在的函数/方法
@@ -86,10 +87,22 @@ SearchHighlight 是一个用于搜索代码中变量、函数等标识符的 VSC
 
 通过`searchhighlight.excludePatterns`配置不需要搜索的目录
 
+### 函数调用
+
+名字后面接着括号时，按函数调用用暗橙色高亮，例如 `foo()`、`name = foo(raw)`、`obj.foo()`、`p->foo()`、`foo<int>()`。不用先确认符号库里这个名字是不是函数。
+
+下面这些仍按读、写上色，不会标成调用：
+
+- 函数定义和声明，例如 `void foo()`、`function foo()`、`def foo():`、`foo() {`
+- 只是提到这个名字、并没有调用，例如 `callback = foo`、`bar(foo)`
+
+括号如果写在下一行，这一行上也认不出调用。
+
 ### 高亮颜色
 
 - `searchhighlight.colors.read`: 读操作高亮颜色 (默认: "rgba(64, 200, 64, 0.5)")
 - `searchhighlight.colors.write`: 写操作高亮颜色 (默认: "rgba(240, 64, 64, 0.5)")
+- `searchhighlight.colors.call`: 函数调用高亮颜色 (默认: "rgba(184, 78, 0, 0.55)")，暗橙色
 
 ### 搜索配置
 

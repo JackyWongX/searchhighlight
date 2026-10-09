@@ -2,7 +2,7 @@
   "name": "searchhighlight",
   "displayName": "SearchHighlight",
   "description": "SearchHighlight主要功能是搜索代码变量和函数以及其他字符并根据搜索到的字符串所在行中的读写属性来显示不同的颜色",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "engines": {
     "vscode": "^1.80.0"
   },
@@ -245,6 +245,11 @@
           "type": "string",
           "default": "rgba(240, 64, 64, 0.5)",
           "description": "写操作高亮颜色"
+        },
+        "searchhighlight.colors.call": {
+          "type": "string",
+          "default": "rgba(184, 78, 0, 0.55)",
+          "description": "函数或方法调用的高亮颜色（暗橙色）"
         },
         "searchhighlight.excludePatterns": {
           "type": "array",

@@ -7,5 +7,8 @@
 		"out": true // set this to false to include "out" folder in search results
 	},
 	// Turn off tsc task auto detection since we have the necessary tasks as npm scripts
-	"typescript.tsc.autoDetect": "off"
+	"typescript.tsc.autoDetect": "off",
+	// 用项目里的 TypeScript。编辑器自带的旧版本会把正常代码报成一堆“找不到 path”之类的错误
+	"typescript.tsdk": "node_modules/typescript/lib",
+	"typescript.enablePromptUseWorkspaceVersion": true
 }

@@ -1,7 +1,9 @@
 {
 	"compilerOptions": {
 		"module": "Node16",
+		"moduleResolution": "Node16",
 		"target": "ES2022",
+		"typeRoots": ["./node_modules/@types"],
 		"outDir": "out",
 		"lib": [
 			"ES2022"

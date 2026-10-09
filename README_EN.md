@@ -2,13 +2,14 @@
 
 [中文](README.md)
 
-SearchHighlight is a VSCode extension for searching code identifiers such as variables and functions. It analyzes the context of search results to determine whether the identifier is being read or written, and highlights them in different colors.
+SearchHighlight is a VSCode extension for searching code identifiers such as variables and functions. It analyzes the context of search results to determine whether the identifier is being read, written, or called, and highlights them in different colors.
 
 ## Features
 
 - Quick search for code identifiers in workspace. The language server symbol index is used first; if it is unavailable or has no match, search falls back to ripgrep
 - Smart detection of read/write operations
-- Customizable highlighting colors
+- Function calls are highlighted in dark orange, separate from reads and writes. A name followed by parentheses counts as a call
+- Customizable highlight colors for reads, writes, and calls
 - Rich configuration for write operation detection
 - Real-time search result statistics
 - Directory-grouped display with the enclosing function/method of each result
@@ -94,10 +95,22 @@ Run the `Reload Write Operation Patterns` command to apply changes immediately.
   - Minified and map files (.min.js, .min.css, .map)
   - Build artifacts and intermediates (.pyc, .dll, .exe, .obj, etc.)
 
+### Function Calls
+
+When the name is followed by parentheses, the occurrence is highlighted in dark orange as a call. Examples: `foo()`, `name = foo(raw)`, `obj.foo()`, `p->foo()`, `foo<int>()`. This does not wait for the symbol index to confirm that the name is a function.
+
+These stay on the read/write colors:
+
+- Definitions and declarations, such as `void foo()`, `function foo()`, `def foo():`, `foo() {`
+- Uses that mention the name without calling it, such as `callback = foo` or `bar(foo)`
+
+A call whose `(` is on the next line is not recognized on this line.
+
 ### Highlight Colors
 
 - `searchhighlight.colors.read`: Read operation highlight color (default: "rgba(64, 200, 64, 0.5)")
 - `searchhighlight.colors.write`: Write operation highlight color (default: "rgba(240, 64, 64, 0.5)")
+- `searchhighlight.colors.call`: Function call highlight color (default: "rgba(184, 78, 0, 0.55)"), a dark orange
 
 ## Keyboard Shortcuts
 
