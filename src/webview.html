@@ -4,13 +4,14 @@
     <meta charset="UTF-8">
     <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src {{cspSource}} data:; style-src 'unsafe-inline'; script-src 'nonce-{{nonce}}';">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src {{cspSource}} data:; style-src {{cspSource}} 'unsafe-inline'; script-src {{cspSource}} 'nonce-{{nonce}}';">
     <title>Search Results</title>    <style>
         body {
             padding: 10px;
             font-family: var(--vscode-font-family);
             font-size: var(--vscode-font-size);
-            color: var(--vscode-foreground);
+            color: var(--vscode-foreground, #cccccc);
+            background: var(--vscode-sideBar-background, #1e1e1e);
         }        .search-container {
             margin-bottom: 10px;
             padding: 4px 0;
@@ -20,9 +21,15 @@
             align-items: center;
             gap: 8px;
         }
-        #search-input {
+        .search-input-wrap {
+            position: relative;
             flex: 1;
-            padding: 6px 8px;
+            min-width: 0;
+        }
+        #search-input {
+            width: 100%;
+            box-sizing: border-box;
+            padding: 6px 28px 6px 8px;
             border: 1px solid var(--vscode-input-border);
             background-color: var(--vscode-input-background);
             color: var(--vscode-input-foreground);
@@ -31,6 +38,49 @@
         }
         #search-input:focus {
             border-color: var(--vscode-focusBorder);
+        }
+        .history-btn {
+            position: absolute;
+            right: 1px;
+            top: 1px;
+            bottom: 1px;
+            width: 24px;
+            padding: 0;
+            border: none;
+            border-radius: 2px;
+            background: transparent;
+            color: var(--vscode-input-foreground);
+            cursor: pointer;
+        }
+        .history-btn:hover {
+            background: var(--vscode-toolbar-hoverBackground);
+        }
+        .history-dropdown {
+            position: absolute;
+            left: 0;
+            right: 0;
+            top: 100%;
+            margin-top: 2px;
+            max-height: 240px;
+            overflow-y: auto;
+            z-index: 20;
+            background: var(--vscode-dropdown-background, var(--vscode-editor-background));
+            border: 1px solid var(--vscode-dropdown-border, var(--vscode-widget-border));
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+        }
+        .history-item {
+            padding: 4px 8px;
+            cursor: pointer;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .history-item:hover {
+            background: var(--vscode-list-hoverBackground);
+        }
+        .history-empty {
+            padding: 6px 8px;
+            color: var(--vscode-descriptionForeground);
         }
         .search-container .controls {
             display: flex;
@@ -142,6 +192,10 @@
         .highlight-write {
             border-radius: 2px;
         }
+        .results-empty {
+            padding: 8px;
+            color: var(--vscode-descriptionForeground);
+        }
         .summary {
             margin-bottom: 12px;
             padding: 8px;
@@ -195,11 +249,15 @@
     </style>
 </head>
 <body>    <div class="summary" id="summary">
-        <div id="summary-text"></div>
+        <div id="summary-text">选中一个词，按 Ctrl+Shift+F 搜索</div>
     </div>
     <div class="search-container" id="search-container">
         <div class="search-row">
-            <input type="text" id="search-input" placeholder="输入搜索内容..." />
+            <div class="search-input-wrap">
+                <input type="text" id="search-input" placeholder="输入搜索内容..." />
+                <button type="button" class="history-btn" id="history-btn" title="搜索历史" aria-expanded="false">▼</button>
+                <div id="history-dropdown" class="history-dropdown" hidden></div>
+            </div>
             <div class="controls">
                 <button class="control-button" id="caseSensitiveBtn" title="区分大小写">Aa</button>
                 <button class="control-button" id="wholeWordBtn" title="全词匹配">\\b</button>
@@ -213,6 +271,12 @@
         <div class="context-menu-item" id="open-in-explorer">在资源管理器中打开</div>
     </div>    <script nonce="{{nonce}}">
         (function() {
+            window.addEventListener('error', (event) => {
+                const summary = document.getElementById('summary-text');
+                if (summary) {
+                    summary.textContent = '结果页出错：' + (event.message || '未知错误');
+                }
+            });
             const vscode = acquireVsCodeApi();
             const path = {
                 basename: function(filePath) {
@@ -325,6 +389,10 @@
 
             // 处理点击事件
             document.addEventListener('click', (e) => {
+                // 点到搜索框外面时收起历史列表
+                if (!e.target.closest('.search-input-wrap')) {
+                    setHistoryOpen(false);
+                }
                 // 隐藏右键菜单
                 document.getElementById('context-menu').style.display = 'none';
 
@@ -467,17 +535,59 @@
                 document.getElementById('context-menu').style.display = 'none';
             });
 
+            // 搜索历史：最近的在最前面，由扩展侧保存并推送
+            let searchHistory = [];
+
+            function setHistoryOpen(open) {
+                document.getElementById('history-dropdown').hidden = !open;
+                document.getElementById('history-btn').setAttribute('aria-expanded', open ? 'true' : 'false');
+            }
+
+            function renderHistory() {
+                const dropdown = document.getElementById('history-dropdown');
+                dropdown.innerHTML = '';
+                if (searchHistory.length === 0) {
+                    const empty = document.createElement('div');
+                    empty.className = 'history-empty';
+                    empty.textContent = '还没有搜索记录';
+                    dropdown.appendChild(empty);
+                    return;
+                }
+                searchHistory.forEach(text => {
+                    const item = document.createElement('div');
+                    item.className = 'history-item';
+                    item.textContent = text;
+                    item.title = text;
+                    item.addEventListener('click', () => runSearch(text));
+                    dropdown.appendChild(item);
+                });
+            }
+
+            function runSearch(text) {
+                const searchText = String(text || '').trim();
+                if (!searchText) {
+                    return;
+                }
+                document.getElementById('search-input').value = searchText;
+                setHistoryOpen(false);
+                vscode.postMessage({
+                    type: 'search',
+                    text: searchText
+                });
+            }
+
             // 处理搜索输入框事件
             document.getElementById('search-input').addEventListener('keyup', (e) => {
                 if (e.key === 'Enter') {
-                    const searchText = e.target.value.trim();
-                    if (searchText) {
-                        vscode.postMessage({
-                            type: 'search',
-                            text: searchText
-                        });
-                    }
+                    runSearch(e.target.value);
+                } else if (e.key === 'Escape') {
+                    setHistoryOpen(false);
                 }
+            });
+
+            document.getElementById('history-btn').addEventListener('click', () => {
+                const dropdown = document.getElementById('history-dropdown');
+                setHistoryOpen(dropdown.hidden);
             });
 
             // 处理按钮点击事件
@@ -531,8 +641,17 @@
                     case 'focusSearch':
                         document.getElementById('search-input').focus();
                         break;
+                    case 'searchHistory':
+                        searchHistory = Array.isArray(message.history) ? message.history : [];
+                        renderHistory();
+                        // 新搜索一开始就会更新历史，这时结果可能还没到，先把列表收起
+                        setHistoryOpen(false);
+                        break;
                 }
             });
+
+            // 页面准备好后再要历史，避免消息比监听更早到达
+            vscode.postMessage({ type: 'ready' });
 
             // 初始化默认颜色
             updateColors(currentColors);
@@ -695,6 +814,12 @@
                 resetResults();
                 appendResults(results);
                 updateSummary(renderedTotal, renderedWriteCount);
+                if (renderedTotal === 0) {
+                    const empty = document.createElement('div');
+                    empty.className = 'results-empty';
+                    empty.textContent = '没有找到匹配';
+                    document.getElementById('results').appendChild(empty);
+                }
 
                 // 恢复折叠状态
                 document.querySelectorAll('.dir-group').forEach(group => {

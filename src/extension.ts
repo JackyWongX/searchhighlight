@@ -1018,7 +1018,16 @@ class RipGrepSearch {
                 }
                 buffer = '';
 
-                // code 1 表示没有找到匹配项，这是正常的；被取消时 code 为 null
+                // code 1 表示没有找到匹配项，这是正常的；用户取消时 code 为 null
+                // 异常退出且一条结果都没有时，要把原因传出去，避免结果页空白还没有任何提示
+                if (code !== 0 && code !== 1 && code !== null && fileResults.length === 0) {
+                    const message = errorOutput.trim() || `ripgrep 进程退出代码 ${code}`;
+                    console.error(message);
+                    finished = true;
+                    cancelSubscription?.dispose();
+                    reject(new Error(message));
+                    return;
+                }
                 if (code !== 0 && code !== 1 && code !== null) {
                     console.error(`ripgrep 进程退出代码 ${code}`);
                 }
@@ -1470,9 +1479,11 @@ class RipGrepSearch {
         flush();
 
         // 单个目录失败不影响其它目录已经得到的结果
+        const failures: string[] = [];
         for (const item of settled) {
             if (item.status === 'rejected') {
                 console.error('部分目录搜索失败:', item.reason);
+                failures.push(item.reason instanceof Error ? item.reason.message : String(item.reason));
             }
         }
 
@@ -1480,6 +1491,10 @@ class RipGrepSearch {
         await functionResolver.enrichResults(allResults, token);
 
         const finalResults = this.rankResults(allResults, startDir, activeFilePath);
+        // 一个结果都没有，而且搜索过程失败了：必须告诉用户，不能只留一个空白页
+        if (failures.length > 0 && finalResults.length === 0 && !token?.isCancellationRequested) {
+            vscode.window.showErrorMessage(`搜索失败：${failures[0]}`);
+        }
         onResults?.(finalResults, true);
         return finalResults;
     }
@@ -1512,9 +1527,15 @@ class RipGrepSearch {
 const ripGrepSearch = new RipGrepSearch();
 
 class SearchResultsProvider implements vscode.WebviewViewProvider {
+    private static readonly HISTORY_KEY = 'searchhighlight.searchHistory';
+    private static readonly HISTORY_LIMIT = 30;
+
     private _view?: vscode.WebviewView;
     private _extensionUri: vscode.Uri;
-    private _currentSearchResults?: { results: SearchResult[]; searchText: string; };
+    private _context: vscode.ExtensionContext;
+    // 最近搜索在数组最前面，相同内容只保留一条
+    private _searchHistory: string[] = [];
+    private _currentSearchResults?: { results: SearchResult[]; searchText: string; searchId: number; };
     private _searchText = '';
     private _lastSearchStartFile?: string;
     // 当前搜索序号，用于丢弃过期搜索的结果，避免旧结果覆盖新结果
@@ -1530,8 +1551,13 @@ class SearchResultsProvider implements vscode.WebviewViewProvider {
     private _highlightedDocKey?: string;
     private _editorChangeListener?: vscode.Disposable;
 
-    constructor(extensionUri: vscode.Uri) {
+    constructor(extensionUri: vscode.Uri, context: vscode.ExtensionContext) {
         this._extensionUri = extensionUri;
+        this._context = context;
+        const stored = context.globalState.get<unknown>(SearchResultsProvider.HISTORY_KEY, []);
+        this._searchHistory = Array.isArray(stored)
+            ? stored.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+            : [];
     }
 
     private _getSearchOptions() {
@@ -1554,8 +1580,7 @@ class SearchResultsProvider implements vscode.WebviewViewProvider {
             localResourceRoots: [this._extensionUri]
         };
 
-        webviewView.webview.html = this._getHtmlForWebview();
-
+        // 先写出页面，保证至少能看到搜索框。监听放在赋值之前，避免页面加载过快时 ready 丢失
         webviewView.webview.onDidReceiveMessage(async message => {
             switch (message.type) {
                 case 'jump':
@@ -1573,6 +1598,18 @@ class SearchResultsProvider implements vscode.WebviewViewProvider {
                     const config = vscode.workspace.getConfiguration('searchhighlight');
                     // 配置变更后由 onDidChangeConfiguration 统一触发重新搜索，避免重复搜索
                     await config.update(message.option, message.value, vscode.ConfigurationTarget.Global);
+                    break;
+                case 'ready':
+                    this._postSearchHistory();
+                    // 快捷键会一边打开结果页一边搜索。搜索先完成时，结果消息会丢，这里等页面准备好再补发一次
+                    if (this._currentSearchResults) {
+                        this._postResults(
+                            this._currentSearchResults.results,
+                            this._currentSearchResults.searchText,
+                            'final',
+                            this._currentSearchResults.searchId
+                        );
+                    }
                     break;
                 case 'search':
                     // 处理来自输入框的搜索请求
@@ -1622,6 +1659,14 @@ class SearchResultsProvider implements vscode.WebviewViewProvider {
                     break;
             }
         });
+
+        try {
+            webviewView.webview.html = this._getHtmlForWebview();
+        } catch (error) {
+            console.error('加载搜索结果页失败:', error);
+            const message = error instanceof Error ? error.message : String(error);
+            webviewView.webview.html = `<!DOCTYPE html><html><body style="padding:12px;font-family:sans-serif;"><p>结果页加载失败：${message}</p></body></html>`;
+        }
     }
 
     public showResults(results: SearchResult[], searchText: string) {
@@ -1630,18 +1675,18 @@ class SearchResultsProvider implements vscode.WebviewViewProvider {
 
     // 把结果推送给视图：delta 用于搜索过程中的增量追加，final 用最终结果整体刷新
     private _postResults(results: SearchResult[], searchText: string, mode: 'delta' | 'final', searchId: number) {
+        const config = vscode.workspace.getConfiguration('searchhighlight');
+        this._searchText = searchText;
+        // 先记下来。结果页还没创建好时也要留着，等它发来 ready 再补发
+        if (mode === 'final') {
+            this._currentSearchResults = { results, searchText, searchId };
+        }
+
         if (!this._view) {
             return;
         }
 
-        const config = vscode.workspace.getConfiguration('searchhighlight');
-        this._searchText = searchText;
-        // 只有最终结果才是完整结果，增量推送不能覆盖已有的完整结果
-        if (mode === 'final') {
-            this._currentSearchResults = { results, searchText };
-        }
-
-        this._view.show(true);
+        // 这里不要再调用 show()。结果页正在打开时再 show，Cursor 会把页面清成空白
         this._view.webview.postMessage({
             type: 'results',
             results,
@@ -1668,10 +1713,32 @@ class SearchResultsProvider implements vscode.WebviewViewProvider {
         }
     }
 
+    // 记住这次搜索：最近的放最前，重复的旧记录删掉
+    private _rememberSearch(searchText: string): void {
+        const text = searchText.trim();
+        if (!text) {
+            return;
+        }
+        this._searchHistory = [
+            text,
+            ...this._searchHistory.filter(item => item !== text)
+        ].slice(0, SearchResultsProvider.HISTORY_LIMIT);
+        void this._context.globalState.update(SearchResultsProvider.HISTORY_KEY, this._searchHistory);
+        this._postSearchHistory();
+    }
+
+    private _postSearchHistory(): void {
+        this._view?.webview.postMessage({
+            type: 'searchHistory',
+            history: this._searchHistory
+        });
+    }
+
     // 执行一次带进度提示的搜索并显示结果
     public async searchWithProgress(searchText: string, startFilePath?: string): Promise<void> {
         this._searchText = searchText;
         this._lastSearchStartFile = startFilePath;
+        this._rememberSearch(searchText);
 
         const searchId = ++this._searchId;
         // 取消上一次仍在进行的搜索，避免两次搜索的结果互相覆盖
@@ -1682,12 +1749,12 @@ class SearchResultsProvider implements vscode.WebviewViewProvider {
         const isStale = () => searchId !== this._searchId;
 
         try {
+            // 进度放在状态栏，不跟搜索的取消绑在一起。
+            // Cursor 里右下角那种可取消进度会一出来就被关掉，取消信号会把 ripgrep 立刻杀掉，结果就变成 0 条
             await vscode.window.withProgress({
-                location: vscode.ProgressLocation.Notification,
-                title: `搜索 "${searchText}"`,
-                cancellable: true
-            }, async (progress, token) => {
-                const cancellation = token.onCancellationRequested(() => cts.cancel());
+                location: vscode.ProgressLocation.Window,
+                title: `搜索 "${searchText}"`
+            }, async (progress) => {
                 try {
                     await ripGrepSearch.search(searchText, startFilePath, (results, isFinal) => {
                         // 丢弃过期搜索的结果
@@ -1701,8 +1768,6 @@ class SearchResultsProvider implements vscode.WebviewViewProvider {
                         console.error('搜索过程中发生错误:', error);
                         vscode.window.showErrorMessage('搜索过程中发生错误');
                     }
-                } finally {
-                    cancellation.dispose();
                 }
             });
         } finally {
@@ -1732,7 +1797,8 @@ class SearchResultsProvider implements vscode.WebviewViewProvider {
         let html = fs.readFileSync(webviewPath, { encoding: 'utf8' });
 
         // 注入 nonce 与 webview 资源来源，满足 VS Code 的内容安全策略要求
-        const nonce = crypto.randomBytes(16).toString('base64');
+        // 只用十六进制，避免 nonce 里的 + / = 把内容安全策略写坏，导致整页空白
+        const nonce = crypto.randomBytes(16).toString('hex');
         html = html.replace(/\{\{nonce\}\}/g, nonce);
         html = html.replace(/\{\{cspSource\}\}/g, this._view ? this._view.webview.cspSource : '');
         return html;
@@ -1879,7 +1945,7 @@ export function activate(context: vscode.ExtensionContext) {
         debugEnabled = vscode.workspace.getConfiguration('searchhighlight').get<boolean>('debug', false);
 
         debugLog('正在创建 SearchResultsProvider...');
-        const searchResultsProvider = new SearchResultsProvider(context.extensionUri);
+        const searchResultsProvider = new SearchResultsProvider(context.extensionUri, context);
         debugLog('正在注册 WebviewViewProvider...');
         const viewDisposable = vscode.window.registerWebviewViewProvider(
             'searchHighlightResults',
@@ -1898,6 +1964,7 @@ export function activate(context: vscode.ExtensionContext) {
         async function ensureViewIsVisible() {
             debugLog('正在确保视图可见...');
             try {
+                // 打开侧边栏里的结果页。不要用 focus 命令，Cursor 里那个命令有时会打开一片空白
                 await vscode.commands.executeCommand('workbench.view.extension.search-highlight');
                 debugLog('视图已显示');
             } catch (error) {

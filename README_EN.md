@@ -14,6 +14,7 @@ SearchHighlight is a VSCode extension for searching code identifiers such as var
 - Directory-grouped display with the enclosing function/method of each result
 - Quick navigation to code location
 - Case sensitivity and whole word match control
+- A ▼ button at the right of the search box opens previous searches, newest first
 - File extension filtering support
 
 ## Usage
@@ -22,7 +23,8 @@ SearchHighlight is a VSCode extension for searching code identifiers such as var
 2. Use shortcut `Ctrl+Shift+F` (Windows) or `Cmd+Shift+F` (MacOS) to search
 3. View results in the Search Highlight view in the activity bar
 4. Use the buttons in the top-right corner to control case sensitivity (Aa) and whole word match (\\b)
-5. Click on results to jump to the corresponding code location
+5. Click the ▼ at the right edge of the search box to see previous searches, newest first. Click one to search that text again and show the results
+6. Click on results to jump to the corresponding code location
 
 ## Extension Settings
 
@@ -127,6 +129,7 @@ Run the `Reload Write Operation Patterns` command to apply changes immediately.
 - If that directory has no rg, it also looks in common VS Code forks such as Cursor, Trae, Trae CN, Windsurf, and VSCodium, then on PATH
 - If rg is still not found, a prompt asks you to set `searchhighlight.ripgrepPath` to the full path of the rg program
 - If rg is found but text search is still slow, check the exclude settings, or add rg to PATH and try again
+- A shortcut search opens the results view first. Results appear after that view is ready, so you do not need to search again. If text search itself fails, an error is shown
 
 ## Contributing
 
